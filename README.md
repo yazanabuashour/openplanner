@@ -2,37 +2,24 @@
 
 `openplanner` is a spec-first local planning SDK for agent-facing calendar and task workflows. The public release surface is an embeddable Go module built around a checked-in OpenAPI contract, generated Go client, in-process local transport, and SQLite storage.
 
-## Repository contents
+## Install in your Go project
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) explains how outside contributors should propose changes.
-- [SECURITY.md](SECURITY.md) explains how to report vulnerabilities privately and what response timing to expect.
-- [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
-- [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
-- [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
-- [sdk/generated](sdk/generated) contains the checked-in generated Go client.
-- [sdk](sdk) opens the generated client against the in-process local transport.
-- [interfaces/openclaw/SKILL.md](interfaces/openclaw/SKILL.md) documents the current OpenClaw-facing install and usage path.
-- [examples/openclaw/agenda](examples/openclaw/agenda) demonstrates a local recurring event/task workflow.
-- [cmd/openplanner](cmd/openplanner) contains the lightweight CLI entrypoint.
-- [LICENSE](LICENSE) defines the project license.
-
-## Release contract
-
-The initial release surface is a tagged Go module at `github.com/yazanabuashour/openplanner` in the `v0.y.z` range. GitHub Releases remain the human-readable release-note surface for those tags and publish source-only release metadata: a deterministic source archive, `SHA256SUMS`, an SPDX SBOM, and GitHub attestations.
-
-Consumers install a pinned version with:
+The first planned public tag is `v0.1.0`. Once that tag is published, the intended consumer install command is:
 
 ```bash
-go get github.com/yazanabuashour/openplanner@v0.y.z
+go get github.com/yazanabuashour/openplanner/sdk@v0.1.0
 ```
 
-Then open the local client in process:
+Go resolves that package version from the root module tag at `github.com/yazanabuashour/openplanner`.
+
+Then open the local runtime in process:
 
 ```go
 package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/yazanabuashour/openplanner/sdk"
@@ -56,24 +43,23 @@ func main() {
 
 	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	endAt := startAt.Add(time.Hour)
-	count := int32(3)
 	_, _, err = client.EventsAPI.CreateEvent(ctx).CreateEventRequest(generated.CreateEventRequest{
 		CalendarId: calendar.Id,
 		Title:      "Standup",
 		StartAt:    &startAt,
 		EndAt:      &endAt,
-		Recurrence: &generated.RecurrenceRule{
-			Frequency: generated.RECURRENCEFREQUENCY_DAILY,
-			Count:     &count,
-		},
 	}).Execute()
 	if err != nil {
 		panic(err)
 	}
+
+	fmt.Println(calendar.Id)
 }
 ```
 
-By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Set `DatabasePath` to override that location.
+By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Set `DatabasePath` to override that location in tests or embedded deployments.
+
+`cmd/openplanner` is a lightweight bootstrap banner for maintainers and debugging. It is not the primary product surface.
 
 ## Runtime model
 
@@ -81,7 +67,26 @@ By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOM
 - The generated base URL is a placeholder used for request construction only. It is not a reachable host service.
 - `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`.
 - Set `sdk.Options.DatabasePath` to override that location. OpenPlanner stores SQLite data exactly at the resulting path.
-- The lightweight CLI in [cmd/openplanner](cmd/openplanner) is a bootstrap banner, not the primary product surface.
+
+## Release contract
+
+The tagged release surface is the Go module at `github.com/yazanabuashour/openplanner`. GitHub Releases remain the human-readable release-note surface for those tags and publish source-only release metadata: a deterministic source archive, `SHA256SUMS`, an SPDX SBOM, and GitHub attestations.
+
+Until `v0.1.0` exists, local development should use a local `replace` directive or a pseudo-version from `main`. After the first tag lands, the SDK package path above is the canonical install story.
+
+## Repository contents
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains how outside contributors should propose changes.
+- [SECURITY.md](SECURITY.md) explains how to report vulnerabilities privately and what response timing to expect.
+- [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
+- [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
+- [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
+- [sdk/generated](sdk/generated) contains the checked-in generated Go client types and operations.
+- [sdk](sdk) opens the generated client against the in-process local transport.
+- [interfaces/openclaw/SKILL.md](interfaces/openclaw/SKILL.md) documents the current OpenClaw-facing install and usage path.
+- [examples/openclaw/agenda](examples/openclaw/agenda) demonstrates a local recurring event/task workflow.
+- [cmd/openplanner](cmd/openplanner) contains the lightweight CLI entrypoint.
+- [LICENSE](LICENSE) defines the project license.
 
 ## Development
 

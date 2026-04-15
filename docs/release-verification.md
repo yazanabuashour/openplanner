@@ -2,6 +2,8 @@
 
 OpenPlanner ships a source-first release for the embeddable Go SDK. Releases do not install a host service, open a port, or create background state on the machine by themselves.
 
+The first planned public tag is `v0.1.0`. Until that tag exists, treat the commands below as the intended verification contract for the first release and use a local `replace` or pseudo-version from `main` during development.
+
 ## Published assets
 
 Each tagged release publishes:
@@ -29,11 +31,13 @@ gh attestation verify openplanner-v0.y.z-source.tar.gz --repo yazanabuashour/ope
 
 ## Verify the module install story
 
-Install the tagged module:
+Install the tagged SDK package:
 
 ```bash
-go get github.com/yazanabuashour/openplanner@v0.y.z
+go get github.com/yazanabuashour/openplanner/sdk@v0.1.0
 ```
+
+Go resolves that package version from the root module tag at `github.com/yazanabuashour/openplanner`.
 
 Then open the SDK locally with the default SQLite path:
 

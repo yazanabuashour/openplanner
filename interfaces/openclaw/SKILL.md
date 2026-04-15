@@ -4,11 +4,13 @@
 
 ## Install
 
-Pin a released tag:
+The first planned public tag is `v0.1.0`. Once it exists, install the SDK package with:
 
 ```bash
-go get github.com/yazanabuashour/openplanner@v0.y.z
+go get github.com/yazanabuashour/openplanner/sdk@v0.1.0
 ```
+
+Go resolves that package version from the root module tag at `github.com/yazanabuashour/openplanner`.
 
 ## Runtime model
 

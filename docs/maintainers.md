@@ -90,7 +90,7 @@ The release workflow has two paths:
 - `workflow_dispatch` packages and attests a snapshot from a chosen ref, then uploads workflow artifacts for manual inspection.
 - Pushing a `v0.y.z` tag runs the same verification and packaging steps, then publishes a GitHub Release and uploads the source archive, `SHA256SUMS`, and SBOM.
 
-Users consume the SDK with `go get github.com/yazanabuashour/openplanner@v0.y.z`.
+The first public tag should be `v0.1.0`. Users consume the SDK with `go get github.com/yazanabuashour/openplanner/sdk@v0.1.0` for that release, then continue using the same package path for later `v0.y.z` tags.
 
 Before tagging:
 

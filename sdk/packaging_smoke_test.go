@@ -8,21 +8,11 @@ import (
 	"testing"
 )
 
-func TestPackageCanBeConsumedFromTempModule(t *testing.T) {
+func TestSDKPackageCanBeConsumedFromTempModule(t *testing.T) {
 	t.Parallel()
 
 	workDir := t.TempDir()
 	repoRoot := filepath.Dir(mustGetwd(t))
-	if err := os.WriteFile(filepath.Join(workDir, "go.mod"), []byte(`module smoke
-
-go 1.26.2
-
-require github.com/yazanabuashour/openplanner v0.0.0
-
-replace github.com/yazanabuashour/openplanner => `+repoRoot+`
-`), 0o644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
-	}
 
 	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte(`package main
 
@@ -76,12 +66,11 @@ func main() {
 		t.Fatalf("write main.go: %v", err)
 	}
 
-	command := exec.Command("go", "run", "-mod=mod", ".")
-	command.Dir = workDir
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run: %v\n%s", err, output)
-	}
+	runCommand(t, workDir, "go", "mod", "init", "smoke")
+	runCommand(t, workDir, "go", "mod", "edit", "-replace=github.com/yazanabuashour/openplanner="+repoRoot)
+	runCommand(t, workDir, "go", "get", "github.com/yazanabuashour/openplanner/sdk@v0.0.0")
+	output := runCommand(t, workDir, "go", "run", "-mod=mod", ".")
+
 	if !strings.Contains(string(output), "agenda=1") {
 		t.Fatalf("unexpected output: %s", output)
 	}
@@ -99,4 +88,17 @@ func mustGetwd(t *testing.T) string {
 	}
 
 	return workingDirectory
+}
+
+func runCommand(t *testing.T, dir string, name string, args ...string) []byte {
+	t.Helper()
+
+	command := exec.Command(name, args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, output)
+	}
+
+	return output
 }
