@@ -64,21 +64,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify formatting
-        run: |
-          files="$(find . -name '*.go' -not -path './vendor/*')"
-
-          if [ -n "${files}" ] && [ -n "$(gofmt -l ${files})" ]; then
-            echo "Run gofmt before pushing changes."
-            gofmt -l ${files}
-            exit 1
-          fi
-
-      - name: Run tests
-        run: go test ./...
-
-      - name: Run lint
-        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 run ./...
+      - name: Run repo checks
+        run: make check
 
   dependency-review:
     name: Dependency review

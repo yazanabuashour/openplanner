@@ -2,7 +2,7 @@
 
 This repository uses **Beads** (`bd`) in embedded mode for maintainer task tracking.
 
-This repository is public, but it is still only a scaffold. There is no deploy pipeline, package publication target, or runnable application yet. Keep maintainer docs honest about that status.
+This repository is public and now ships a tagged Go module as its first distributable artifact. There is still no hosted service, no auth-backed product surface, and no package registry beyond the Go module/tag flow. Keep maintainer docs honest about that status.
 
 ## Initial Setup
 
@@ -65,6 +65,7 @@ Current readiness assumptions:
 - `main` is the protected default branch.
 - Pull requests run only untrusted-safe validation with read-only token scope.
 - GitHub Releases are created from version tags in the `v0.y.z` form.
+- The first distributable surface is the Go module resolved from those tags.
 - Security reports are expected through GitHub private vulnerability reporting.
 
 Current review enforcement nuance:
@@ -82,4 +83,6 @@ When changing GitHub settings, keep the repo aligned with:
 
 ## Release notes
 
-The current release contract is GitHub Releases only. Tag a version like `v0.1.0`, push the tag, and let the release workflow generate notes from the tag. Do not attach build artifacts, checksums, provenance, or SBOMs until the project actually ships distributable outputs and the stronger release process is implemented.
+The current release contract is a tagged Go module plus GitHub Releases notes. Tag a version like `v0.1.0`, push the tag, and let the release workflow generate notes from the tag. Users consume the SDK with `go get github.com/yazanabuashour/openplanner@v0.1.0`.
+
+Do not attach build artifacts, checksums, provenance, or SBOMs until the stronger release process in the artifact-hardening issues is implemented.

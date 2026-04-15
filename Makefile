@@ -1,7 +1,7 @@
 MISE ?= mise
 GOFILES := $(shell find . -name '*.go' -not -path './vendor/*')
 
-.PHONY: fmt fmt-check lint test check
+.PHONY: fmt fmt-check lint test openapi-lint openapi-generate openapi-check check
 
 fmt:
 	@if [ -n "$(GOFILES)" ]; then $(MISE) exec -- gofmt -w $(GOFILES); fi
@@ -19,4 +19,15 @@ lint:
 test:
 	$(MISE) exec -- go test ./...
 
-check: fmt-check test lint
+openapi-lint:
+	docker run --rm \
+		-v "$(CURDIR):/work" \
+		stoplight/spectral:6.15.0 lint /work/openapi/openapi.yaml --ruleset /work/.spectral.yaml
+
+openapi-generate:
+	./scripts/openapi-generate.sh
+
+openapi-check:
+	./scripts/openapi-check.sh
+
+check: fmt-check openapi-lint openapi-check test lint

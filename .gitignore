@@ -7,3 +7,4 @@
 # Go build artifacts
 /bin/
 coverage.out
+.openapi-generator-tmp/
