@@ -83,8 +83,8 @@ Until `v0.1.0` exists, local development should use a local `replace` directive 
 - [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
 - [sdk/generated](sdk/generated) contains the checked-in generated Go client types and operations.
 - [sdk](sdk) opens the generated client against the in-process local transport.
-- [interfaces/openclaw/SKILL.md](interfaces/openclaw/SKILL.md) documents the current OpenClaw-facing install and usage path.
-- [examples/openclaw/agenda](examples/openclaw/agenda) demonstrates a local recurring event/task workflow.
+- [skills/openplanner/SKILL.md](skills/openplanner/SKILL.md) documents the Agent Skills-compatible OpenPlanner install and usage path.
+- [examples/openplanner/agenda](examples/openplanner/agenda) demonstrates a local recurring event/task workflow.
 - [cmd/openplanner](cmd/openplanner) contains the lightweight CLI entrypoint.
 - [LICENSE](LICENSE) defines the project license.
 
