@@ -1,0 +1,5 @@
+[tools]
+go = "1.26.2"
+golangci-lint = "2.11.4"
+"aqua:gastownhall/beads" = "1.0.0"
+"aqua:dolthub/dolt" = "1.86.1"
