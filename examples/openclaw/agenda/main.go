@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yazanabuashour/openplanner/sdk"
@@ -10,7 +12,18 @@ import (
 )
 
 func main() {
-	client, err := sdk.OpenLocal(sdk.Options{DatabasePath: "./openplanner-example.db"})
+	// Use a throwaway database so the example stays rerunnable.
+	tempDir, err := os.MkdirTemp("", "openplanner-agenda-example-*")
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			panic(removeErr)
+		}
+	}()
+
+	client, err := sdk.OpenLocal(sdk.Options{DatabasePath: filepath.Join(tempDir, "openplanner-example.db")})
 	if err != nil {
 		panic(err)
 	}

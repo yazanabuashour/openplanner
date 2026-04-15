@@ -90,8 +90,8 @@ func NewConfiguration() *Configuration {
 		Debug:         false,
 		Servers: ServerConfigurations{
 			{
-				URL:         "http://openplanner.local",
-				Description: "No description provided",
+				URL:         "http://openplanner.invalid",
+				Description: "Placeholder base URL for the in-process transport. No network listener is started.",
 			},
 		},
 		OperationServers: map[string]ServerConfigurations{},

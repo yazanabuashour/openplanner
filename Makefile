@@ -1,7 +1,8 @@
 MISE ?= mise
 GOFILES := $(shell find . -name '*.go' -not -path './vendor/*')
+GOVULNCHECK_VERSION ?= v1.2.0
 
-.PHONY: fmt fmt-check lint test openapi-lint openapi-generate openapi-check check
+.PHONY: fmt fmt-check lint test vuln-check openapi-lint openapi-generate openapi-check check
 
 fmt:
 	@if [ -n "$(GOFILES)" ]; then $(MISE) exec -- gofmt -w $(GOFILES); fi
@@ -19,6 +20,9 @@ lint:
 test:
 	$(MISE) exec -- go test ./...
 
+vuln-check:
+	$(MISE) exec -- go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
 openapi-lint:
 	docker run --rm \
 		-v "$(CURDIR):/work" \
@@ -30,4 +34,4 @@ openapi-generate:
 openapi-check:
 	./scripts/openapi-check.sh
 
-check: fmt-check openapi-lint openapi-check test lint
+check: fmt-check openapi-lint openapi-check test vuln-check lint

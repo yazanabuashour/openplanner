@@ -1,27 +1,149 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to verify and package
+        required: true
+        default: main
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish-release:
-    name: Publish GitHub Release
+  verify:
+    name: Verify release inputs
     runs-on: ubuntu-latest
     steps:
-      - name: Create GitHub Release from tag
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run repository checks
+        run: make check
+
+  package-release:
+    name: Package and attest source release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      archive_name: ${{ steps.meta.outputs.archive_name }}
+      sbom_name: ${{ steps.meta.outputs.sbom_name }}
+      checksums_name: ${{ steps.meta.outputs.checksums_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Derive release metadata
+        id: meta
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          revision="$(git rev-parse HEAD)"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            ref_name="${INPUT_REF:-${GITHUB_REF_NAME}}"
+            ref_name="${ref_name//\//-}"
+            version="snapshot-${ref_name}-${revision::7}"
+          fi
+
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "archive_name=openplanner-${version}-source.tar.gz" >> "${GITHUB_OUTPUT}"
+          echo "sbom_name=openplanner-${version}.spdx.json" >> "${GITHUB_OUTPUT}"
+          echo "checksums_name=openplanner-${version}.SHA256SUMS" >> "${GITHUB_OUTPUT}"
+
+      - name: Build deterministic source archive
+        env:
+          ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
+          REVISION: ${{ steps.meta.outputs.revision }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          mkdir -p release-assets/source-tree
+          git archive --format=tar --prefix="openplanner-${VERSION}/" "${REVISION}" \
+            | gzip -n > "release-assets/${ARCHIVE_NAME}"
+          tar -xzf "release-assets/${ARCHIVE_NAME}" -C release-assets/source-tree
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b
+        with:
+          path: ./release-assets/source-tree
+          output-file: ./release-assets/${{ steps.meta.outputs.sbom_name }}
+          format: spdx-json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate checksums
+        env:
+          ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
+          SBOM_NAME: ${{ steps.meta.outputs.sbom_name }}
+          CHECKSUMS_NAME: ${{ steps.meta.outputs.checksums_name }}
+        run: |
+          cd release-assets
+          sha256sum "${ARCHIVE_NAME}" "${SBOM_NAME}" > "${CHECKSUMS_NAME}"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: release-assets/*.*
+
+      - name: Attest source provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        with:
+          subject-path: ./release-assets/${{ steps.meta.outputs.archive_name }}
+
+      - name: Attest SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        with:
+          subject-path: ./release-assets/${{ steps.meta.outputs.archive_name }}
+          sbom-path: ./release-assets/${{ steps.meta.outputs.sbom_name }}
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: package-release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            echo "Release already exists for ${GITHUB_REF_NAME}"
-            exit 0
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --generate-notes
           fi
 
-          gh release create "${GITHUB_REF_NAME}" \
-            --verify-tag \
-            --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber

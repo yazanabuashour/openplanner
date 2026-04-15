@@ -85,6 +85,9 @@ func main() {
 	if !strings.Contains(string(output), "agenda=1") {
 		t.Fatalf("unexpected output: %s", output)
 	}
+	if _, err := os.Stat(filepath.Join(workDir, "smoke.db")); err != nil {
+		t.Fatalf("smoke.db missing: %v", err)
+	}
 }
 
 func mustGetwd(t *testing.T) string {

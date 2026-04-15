@@ -99,3 +99,15 @@ func TestOpenAPIPinsRecurrenceRuleShape(t *testing.T) {
 		t.Fatal("bounded recurrence selectors missing")
 	}
 }
+
+func TestOpenAPIDocumentsInProcessPlaceholderServer(t *testing.T) {
+	t.Parallel()
+
+	spec := readSpec(t)
+	if !strings.Contains(spec, "http://openplanner.invalid") {
+		t.Fatal("placeholder in-process server URL missing")
+	}
+	if !strings.Contains(spec, "No network listener is started.") {
+		t.Fatal("in-process server description missing")
+	}
+}

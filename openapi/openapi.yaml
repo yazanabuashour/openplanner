@@ -6,7 +6,8 @@ info:
     Spec-first contract for the local-first OpenPlanner SDK. The generated Go
     client is the primary shippable artifact in v1.
 servers:
-  - url: http://openplanner.local
+  - url: http://openplanner.invalid
+    description: Placeholder base URL for the in-process transport. No network listener is started.
 tags:
   - name: calendars
   - name: events

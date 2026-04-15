@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-This project is pre-`1.0` and does not yet ship a runnable application or package. Until `0.1.0`, the only supported code line is the current default branch and the most recent `0.y.z` tag, if one exists.
+This project is pre-`1.0` and ships an embeddable Go module with in-process local transport. The supported code line is the current default branch and the most recent `0.y.z` tag, if one exists.
 
 Older pre-`1.0` tags are not guaranteed to receive fixes or backports.
 
@@ -49,4 +49,4 @@ Maintainers will triage reports using practical impact on repository users and m
 
 If a vulnerability affects the latest supported code line, maintainers may cut an out-of-band patch tag and GitHub Release outside the normal release cadence.
 
-Because the repository does not yet ship build artifacts or packages, emergency fixes currently mean source changes and release notes only.
+Emergency releases should refresh the source archive, `SHA256SUMS`, SBOM, and GitHub attestations alongside the tag and release notes.

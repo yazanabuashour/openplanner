@@ -1,12 +1,13 @@
 # openplanner
 
-`openplanner` is a spec-first local planning SDK for agent-facing calendar and task workflows. The first public artifact is a tagged Go module built around a checked-in OpenAPI contract, generated Go client, embedded local transport, and SQLite storage.
+`openplanner` is a spec-first local planning SDK for agent-facing calendar and task workflows. The public release surface is an embeddable Go module built around a checked-in OpenAPI contract, generated Go client, in-process local transport, and SQLite storage.
 
 ## Repository contents
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) explains how outside contributors should propose changes.
 - [SECURITY.md](SECURITY.md) explains how to report vulnerabilities privately and what response timing to expect.
 - [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
+- [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
 - [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
 - [sdk/generated](sdk/generated) contains the checked-in generated Go client.
 - [sdk](sdk) opens the generated client against the in-process local transport.
@@ -17,7 +18,7 @@
 
 ## Release contract
 
-The initial release surface is a tagged Go module at `github.com/yazanabuashour/openplanner` in the `v0.y.z` range. GitHub Releases remain the human-readable release-note surface for those tags.
+The initial release surface is a tagged Go module at `github.com/yazanabuashour/openplanner` in the `v0.y.z` range. GitHub Releases remain the human-readable release-note surface for those tags and publish source-only release metadata: a deterministic source archive, `SHA256SUMS`, an SPDX SBOM, and GitHub attestations.
 
 Consumers install a pinned version with:
 
@@ -39,7 +40,7 @@ import (
 )
 
 func main() {
-	client, err := sdk.OpenLocal(sdk.Options{DatabasePath: "./openplanner.db"})
+	client, err := sdk.OpenLocal(sdk.Options{})
 	if err != nil {
 		panic(err)
 	}
@@ -72,6 +73,16 @@ func main() {
 }
 ```
 
+By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Set `DatabasePath` to override that location.
+
+## Runtime model
+
+- `sdk.OpenLocal(...)` keeps all calls in process through a local round tripper. It does not bind a port, open a localhost listener, or start a daemon.
+- The generated base URL is a placeholder used for request construction only. It is not a reachable host service.
+- `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`.
+- Set `sdk.Options.DatabasePath` to override that location. OpenPlanner stores SQLite data exactly at the resulting path.
+- The lightweight CLI in [cmd/openplanner](cmd/openplanner) is a bootstrap banner, not the primary product surface.
+
 ## Development
 
 Install the pinned toolchain with:
@@ -80,7 +91,7 @@ Install the pinned toolchain with:
 mise install
 ```
 
-Run the CLI with:
+Inspect the bootstrap CLI with:
 
 ```bash
 go run ./cmd/openplanner
@@ -91,6 +102,8 @@ Run the local quality gates with:
 ```bash
 make check
 ```
+
+`make check` runs formatting validation, OpenAPI lint/checks, the Go test suite, a temp-module packaging smoke test, `govulncheck`, and `golangci-lint`.
 
 Regenerate the checked-in client after changing `openapi/openapi.yaml`:
 

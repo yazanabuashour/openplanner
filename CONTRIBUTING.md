@@ -4,9 +4,9 @@ Outside contributors do not need Beads to contribute to this repository.
 
 ## Current project shape
 
-This repository is still in the scaffold stage. There is no runnable app or published package yet, so contribution expectations currently focus on repository policy, documentation, workflow automation, and project setup.
+This repository ships an embeddable Go module and generated client for in-process local use. It does not ship a standalone host service, background daemon, or native installer.
 
-If a pull request introduces the first runnable component, it should also introduce the tests, local run instructions, and compatibility notes needed to support that component.
+Changes to the public SDK surface should also update the install/runtime docs, compatibility notes, and validation gates that keep the in-process release story honest.
 
 ## Local setup
 
@@ -29,12 +29,18 @@ Beads and Dolt are maintainer-only tools. They are optional for outside contribu
 
 ## Checks and review rules
 
-Current pull request checks validate repository policy and dependency-review safety. They do not imply that a runtime, package, or deployment contract exists yet.
+Current pull request checks validate repository policy, the embeddable Go SDK, its OpenAPI contract, packaging smoke coverage, dependency review, and a Go vulnerability scan.
 
-Before the project ships runnable code, maintainers expect pull requests to leave the repository in a public-safe, policy-consistent state. As code lands, this document will expand to cover the actual test and compatibility gates.
+Before sending a pull request, run:
+
+```bash
+make check
+```
+
+`go test ./...` includes the temp-module packaging smoke test that opens `sdk.OpenLocal(...)`, writes SQLite data to an explicit path, and reads it back without any host service.
 
 ## Support and compatibility
 
-Before `0.1.0`, compatibility is best effort and may change between releases. Maintainers do not currently promise support for any operating system, runtime, or deployment target because no such product surface exists yet.
+Before `1.0`, compatibility is best effort and may change between releases. The supported product surface is the in-process Go SDK on Go `1.26.2` with SQLite storage under `${XDG_DATA_HOME:-~/.local/share}/openplanner` by default, plus explicit path override support. No compatibility promise is made for a hosted service, background process, or native installer because none is shipped.
 
 Maintainer workflow notes live in [docs/maintainers.md](docs/maintainers.md).
