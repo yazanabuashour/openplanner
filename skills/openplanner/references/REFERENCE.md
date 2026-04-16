@@ -25,12 +25,22 @@ Treat that command as forward-looking release documentation until the tag exists
 - `sdk.OpenLocal(sdk.Options{})` stores SQLite data under `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`.
 - Set `sdk.Options.DatabasePath` to override the SQLite path explicitly.
 
+## Agent quick start
+
+- For live local state, call `sdk.DefaultDatabasePath()` and pass the result as `sdk.Options.DatabasePath`.
+- For tests, demos, and examples, pass an explicit throwaway `DatabasePath` so the run is isolated and rerunnable.
+- Use `CalendarsAPI.ListCalendars`, `EventsAPI.ListEvents`, `TasksAPI.ListTasks`, and `AgendaAPI.ListAgenda` for read-only answers before writing new data.
+- Use `TasksAPI.CompleteTask` only when the user asks to mark a specific task occurrence complete.
+- Use `go run ./examples/openplanner/query --from <RFC3339> --to <RFC3339>` for a compact read-only calendar and agenda dump.
+- Do not call or probe `http://openplanner.invalid`; it is only the generated client's placeholder base URL.
+
 ## Recommended repo entrypoints
 
 - `openapi/openapi.yaml`
 - `sdk/client.go`
 - `sdk/generated/`
 - `examples/openplanner/agenda/main.go`
+- `examples/openplanner/query/main.go`
 
 ## Example workflow
 
