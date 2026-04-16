@@ -1,104 +1,93 @@
 ---
 name: openplanner
-description: Manage local calendar and task workflows through OpenPlanner's in-process Go SDK. Use this skill when an agent needs to create calendars, schedule recurring events or tasks, query agenda ranges, or complete task occurrences without starting a daemon or calling a hosted service.
+description: Manage local calendar and task workflows through OpenPlanner's ergonomic in-process Go SDK. Use this skill when an agent needs to create calendars, schedule events or tasks, query agenda ranges, or complete task occurrences without starting a daemon or calling a hosted service.
 license: MIT
 compatibility: Requires Go 1.26.2+ and local filesystem access for SQLite storage. OpenPlanner runs in process and does not require a daemon, localhost service, auth flow, or runtime network access.
 ---
 
-# OpenPlanner
+# OpenPlanner Agent SDK
 
-Use this skill when you need local planning state in an agent or Go program and the repository or environment already has access to the OpenPlanner module.
+Use this skill for local-first planning tasks. The production agent path is the
+hand-written SDK facade on top of `sdk.OpenLocal(...)`, not raw generated
+OpenAPI request builders.
 
-## Activate when
+## Default Path
 
-- You need to create or list calendars through the Go SDK.
-- You need recurring events or recurring tasks backed by local SQLite state.
-- You need to query an agenda window or complete recurring task occurrences.
-- You need an in-process planning API instead of a hosted service or background daemon.
+- Install from the current development line until a release tag exists:
+  `go get github.com/yazanabuashour/openplanner@main`.
+- Import `github.com/yazanabuashour/openplanner/sdk`.
+- Open local data with `sdk.OpenLocal(sdk.Options{})`.
+- Use `EnsureCalendar`, `CreateEvent`, `CreateTask`, `ListAgenda`,
+  `ListEvents`, `ListTasks`, and `CompleteTask` for routine planning work.
+- Use `sdk.Options{DatabasePath: "..."}` only when the user names a specific
+  database or you are using an isolated test database.
 
-## Workflow
+Do not inspect `sdk/generated`, generated request builders, the Go module cache,
+or large dependency directories for routine add/list/agenda/complete tasks. Use
+targeted repo searches only when the SDK facade does not cover the user's ask.
 
-1. Open a client with `sdk.OpenLocal(sdk.Options{})` or with an explicit `DatabasePath` for tests and throwaway runs.
-2. Use `sdk/generated` request types with the generated client APIs.
-3. Create or list calendars before writing events or tasks.
-4. Create recurring events or recurring tasks as needed.
-5. Query `AgendaAPI.ListAgenda(...)` for the target time range.
-6. Complete task occurrences through `TasksAPI.CompleteTask(...)` when needed.
-
-## Common queries
-
-Use the default database path when answering questions about live local planning state:
-
-```go
-databasePath, err := sdk.DefaultDatabasePath()
-if err != nil {
-	panic(err)
-}
-
-client, err := sdk.OpenLocal(sdk.Options{DatabasePath: databasePath})
-if err != nil {
-	panic(err)
-}
-defer client.Close()
-```
-
-List calendars:
+## Common Workflow
 
 ```go
-page, _, err := client.CalendarsAPI.ListCalendars(ctx).Execute()
-if err != nil {
-	panic(err)
-}
-for _, calendar := range page.Items {
-	fmt.Printf("%s\t%s\n", calendar.Id, calendar.Name)
-}
-```
+package main
 
-List tasks and events. Add `.CalendarId(calendarID)` before `.Execute()` when the user asks for one calendar:
+import (
+	"context"
+	"log"
+	"time"
 
-```go
-tasks, _, err := client.TasksAPI.ListTasks(ctx).Limit(200).Execute()
-if err != nil {
-	panic(err)
-}
-events, _, err := client.EventsAPI.ListEvents(ctx).Limit(200).Execute()
-if err != nil {
-	panic(err)
-}
-fmt.Printf("tasks=%d events=%d\n", len(tasks.Items), len(events.Items))
-```
+	"github.com/yazanabuashour/openplanner/sdk"
+)
 
-Query an agenda window:
+func main() {
+	api, err := sdk.OpenLocal(sdk.Options{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer api.Close()
 
-```go
-from := time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
-to := from.AddDate(0, 0, 7)
-agenda, _, err := client.AgendaAPI.ListAgenda(ctx).From(from).To(to).Limit(200).Execute()
-if err != nil {
-	panic(err)
-}
-for _, item := range agenda.Items {
-	fmt.Printf("%s\t%s\t%s\n", item.Kind, item.OccurrenceKey, item.Title)
+	ctx := context.Background()
+	calendar, err := api.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Personal"})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.Local)
+	endAt := startAt.Add(time.Hour)
+	if _, err := api.CreateEvent(ctx, sdk.EventInput{
+		CalendarID: calendar.Calendar.ID,
+		Title:      "Standup",
+		StartAt:    &startAt,
+		EndAt:      &endAt,
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	agenda, err := api.ListAgenda(ctx, sdk.AgendaOptions{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local),
+		To:   time.Date(2026, 4, 17, 0, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("agenda items=%d", len(agenda.Items))
 }
 ```
 
-Complete a task occurrence:
+Use `EnsureCalendar` before writing events or tasks. It returns `created`,
+`already_exists`, or `updated` and avoids duplicate calendar setup.
 
-```go
-occurrenceDate := "2026-04-16"
-_, _, err := client.TasksAPI.CompleteTask(ctx, taskID).
-	CompleteTaskRequest(generated.CompleteTaskRequest{OccurrenceDate: &occurrenceDate}).
-	Execute()
-if err != nil {
-	panic(err)
-}
-```
+## Task And Agenda Recipes
 
-For a runnable read-only helper, use `go run ./examples/openplanner/query --from <RFC3339> --to <RFC3339>`.
+Copyable task snippets live at [references/planning.md](references/planning.md).
+Use those examples for all-day events, timed tasks, recurring tasks, agenda
+windows, and task completion.
 
-## Install notes
+## Generated Client Fallback
 
-- The repository does not have a release tag yet, so current consumers should use a local checkout with a `replace` directive or a pseudo-version from `main`.
-- Future tagged installs will use `go get github.com/yazanabuashour/openplanner/sdk@v0.1.0` or later, but that is not the current primary path.
+The generated OpenAPI client remains embedded on `sdk.Client` for advanced
+API-contract work, HTTP compatibility checks, or endpoints not yet covered by
+the SDK facade. Do not start there for common agent tasks.
 
-See [the reference guide](references/REFERENCE.md) for runtime details, entrypoints, and the example workflow.
+See [the reference guide](references/REFERENCE.md) for runtime details and
+entrypoints.

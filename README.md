@@ -4,13 +4,12 @@
 
 ## Install in your Go project
 
-The first planned public tag is `v0.1.0`. Once that tag is published, the intended consumer install command is:
+Until the first release tag is published, install the current development line
+and import the SDK package from it:
 
 ```bash
-go get github.com/yazanabuashour/openplanner/sdk@v0.1.0
+go get github.com/yazanabuashour/openplanner@main
 ```
-
-Go resolves that package version from the root module tag at `github.com/yazanabuashour/openplanner`.
 
 Then open the local runtime in process:
 
@@ -23,7 +22,6 @@ import (
 	"time"
 
 	"github.com/yazanabuashour/openplanner/sdk"
-	"github.com/yazanabuashour/openplanner/sdk/generated"
 )
 
 func main() {
@@ -34,30 +32,41 @@ func main() {
 	defer client.Close()
 
 	ctx := context.Background()
-	calendar, _, err := client.CalendarsAPI.CreateCalendar(ctx).
-		CreateCalendarRequest(generated.CreateCalendarRequest{Name: "Personal"}).
-		Execute()
+	calendar, err := client.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Personal"})
 	if err != nil {
 		panic(err)
 	}
 
 	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	endAt := startAt.Add(time.Hour)
-	_, _, err = client.EventsAPI.CreateEvent(ctx).CreateEventRequest(generated.CreateEventRequest{
-		CalendarId: calendar.Id,
+	_, err = client.CreateEvent(ctx, sdk.EventInput{
+		CalendarID: calendar.Calendar.ID,
 		Title:      "Standup",
 		StartAt:    &startAt,
 		EndAt:      &endAt,
-	}).Execute()
+	})
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(calendar.Id)
+	agenda, err := client.ListAgenda(ctx, sdk.AgendaOptions{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(len(agenda.Items))
 }
 ```
 
 By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Set `DatabasePath` to override that location in tests or embedded deployments.
+
+For common local planning tasks, prefer the ergonomic helper methods on the SDK
+client over generated OpenAPI method names: `EnsureCalendar`, `CreateEvent`,
+`CreateTask`, `ListAgenda`, `ListEvents`, `ListTasks`, and `CompleteTask`. The
+embedded generated client remains available for advanced API-contract work.
 
 `cmd/openplanner` is a lightweight bootstrap banner for maintainers and debugging. It is not the primary product surface.
 
@@ -72,7 +81,7 @@ By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOM
 
 The tagged release surface is the Go module at `github.com/yazanabuashour/openplanner`. GitHub Releases remain the human-readable release-note surface for those tags and publish source-only release metadata: a deterministic source archive, `SHA256SUMS`, an SPDX SBOM, and GitHub attestations.
 
-Until `v0.1.0` exists, local development should use a local `replace` directive or a pseudo-version from `main`. After the first tag lands, the SDK package path above is the canonical install story.
+Until `v0.1.0` exists, local development should use a local `replace` directive, a pseudo-version from `main`, or `@main`. After the first tag lands, consumers should use the tagged root module version.
 
 ## Repository contents
 
@@ -80,6 +89,7 @@ Until `v0.1.0` exists, local development should use a local `replace` directive 
 - [SECURITY.md](SECURITY.md) explains how to report vulnerabilities privately and what response timing to expect.
 - [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
 - [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
+- [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows without mixing comparison variants into the production skill.
 - [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
 - [sdk/generated](sdk/generated) contains the checked-in generated Go client types and operations.
 - [sdk](sdk) opens the generated client against the in-process local transport.

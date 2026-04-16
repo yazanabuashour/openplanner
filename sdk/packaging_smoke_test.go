@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/yazanabuashour/openplanner/sdk"
-	"github.com/yazanabuashour/openplanner/sdk/generated"
 )
 
 func main() {
@@ -34,7 +33,7 @@ func main() {
 	defer client.Close()
 
 	ctx := context.Background()
-	calendar, _, err := client.CalendarsAPI.CreateCalendar(ctx).CreateCalendarRequest(generated.CreateCalendarRequest{Name: "Smoke"}).Execute()
+	calendar, err := client.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Smoke"})
 	if err != nil {
 		panic(err)
 	}
@@ -42,20 +41,20 @@ func main() {
 	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	endAt := startAt.Add(time.Hour)
 	count := int32(1)
-	if _, _, err := client.EventsAPI.CreateEvent(ctx).CreateEventRequest(generated.CreateEventRequest{
-		CalendarId: calendar.Id,
-		Title: "Checkin",
-		StartAt: &startAt,
-		EndAt: &endAt,
-		Recurrence: &generated.RecurrenceRule{Frequency: generated.RECURRENCEFREQUENCY_DAILY, Count: &count},
-	}).Execute(); err != nil {
+	if _, err := client.CreateEvent(ctx, sdk.EventInput{
+		CalendarID: calendar.Calendar.ID,
+		Title:      "Checkin",
+		StartAt:    &startAt,
+		EndAt:      &endAt,
+		Recurrence: &sdk.RecurrenceRule{Frequency: sdk.RecurrenceFrequencyDaily, Count: &count},
+	}); err != nil {
 		panic(err)
 	}
 
-	agenda, _, err := client.AgendaAPI.ListAgenda(ctx).
-		From(time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)).
-		To(time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)).
-		Execute()
+	agenda, err := client.ListAgenda(ctx, sdk.AgendaOptions{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		panic(err)
 	}

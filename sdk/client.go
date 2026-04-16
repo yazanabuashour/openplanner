@@ -25,6 +25,7 @@ type Options struct {
 
 type Client struct {
 	*generated.APIClient
+	service *service.Service
 	closeFn func() error
 }
 
@@ -44,7 +45,8 @@ func OpenLocal(options Options) (*Client, error) {
 		return nil, err
 	}
 
-	handler := api.NewHandler(service.New(repository))
+	localService := service.New(repository)
+	handler := api.NewHandler(localService)
 	configuration := generated.NewConfiguration()
 	configuration.HTTPClient = &http.Client{
 		Transport: &localRoundTripper{handler: handler},
@@ -58,6 +60,7 @@ func OpenLocal(options Options) (*Client, error) {
 
 	return &Client{
 		APIClient: generated.NewAPIClient(configuration),
+		service:   localService,
 		closeFn:   repository.Close,
 	}, nil
 }
