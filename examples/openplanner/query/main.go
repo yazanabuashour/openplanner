@@ -19,17 +19,19 @@ func main() {
 }
 
 func run() error {
-	defaultDatabasePath, err := sdk.DefaultDatabasePath()
-	if err != nil {
-		return err
-	}
-
-	databasePath := flag.String("db", defaultDatabasePath, "SQLite database path")
+	databasePath := flag.String("db", "", "SQLite database path; defaults to the OpenPlanner data path")
 	fromValue := flag.String("from", "", "inclusive RFC3339 agenda start")
 	toValue := flag.String("to", "", "exclusive RFC3339 agenda end")
 	limit := flag.Int("limit", 50, "maximum agenda items to return")
 	flag.Parse()
 
+	if *databasePath == "" {
+		defaultDatabasePath, err := sdk.DefaultDatabasePath()
+		if err != nil {
+			return err
+		}
+		*databasePath = defaultDatabasePath
+	}
 	if *fromValue == "" || *toValue == "" {
 		return fmt.Errorf("both -from and -to are required")
 	}
