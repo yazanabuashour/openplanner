@@ -1,6 +1,7 @@
 # Maintainer Notes
 
 This repository uses **Beads** (`bd`) in embedded mode for maintainer task tracking.
+The embedded Dolt database is authoritative; `.beads/issues.jsonl` is only a local JSONL export/backup and must stay untracked.
 
 This repository is public and its release surface is an embeddable Go module plus source-release metadata. There is still no hosted service, no auth-backed product surface, no background daemon, and no package registry beyond the Go module/tag flow. Keep maintainer docs honest about that status.
 

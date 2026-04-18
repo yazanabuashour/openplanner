@@ -1,0 +1,734 @@
+{
+  "issue": "op-agentops",
+  "date": "maturity-throughput-expansion-smoke",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "harness": "codex exec --json --full-auto from throwaway run directories; single-turn scenarios use --ephemeral, multi-turn scenarios resume a persisted eval session with explicit writable eval roots",
+  "parallelism": 3,
+  "cache_mode": "shared",
+  "cache_prewarm_seconds": 22.11,
+  "harness_elapsed_seconds": 26.15,
+  "phase_totals": {
+    "copy_repo_seconds": 0.15,
+    "seed_db_seconds": 0.03,
+    "agent_run_seconds": 62.03,
+    "total_seconds": 62.22
+  },
+  "effective_parallel_speedup": 2.37,
+  "parallel_efficiency": 0.79,
+  "codex_version": "codex-cli 0.121.0",
+  "history_isolation": {
+    "status": "passed",
+    "ephemeral_flag_required": true,
+    "run_directory_outside_repo": true,
+    "new_session_files_after_run": 2,
+    "single_turn_ephemeral_runs": 4,
+    "multi_turn_persisted_sessions": 2,
+    "multi_turn_persisted_turns": 4,
+    "openplanner_workspace_used": false,
+    "desktop_app_used": false,
+    "verification_method": "Single-turn scenarios use codex exec --ephemeral from \u003crun-root\u003e/production/\u003cscenario\u003e/repo. Multi-turn scenarios create one persisted Codex exec session per scenario and resume it for later turns; all raw logs stay under \u003crun-root\u003e."
+  },
+  "command_template": [
+    "OPENPLANNER_DATABASE_PATH=\u003crun-root\u003e/production/\u003cscenario\u003e/repo/openplanner.db",
+    "GOCACHE=\u003crun-root\u003e/shared-cache/gocache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gocache",
+    "GOMODCACHE=\u003crun-root\u003e/shared-cache/gomodcache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gomodcache",
+    "single turn: codex exec --json --ephemeral --full-auto --skip-git-repo-check --add-dir \u003crun-root\u003e/production/\u003cscenario\u003e --add-dir \u003crun-root\u003e/shared-cache when --cache-mode shared -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo -m gpt-5.4-mini -c model_reasoning_effort=\"medium\" -c shell_environment_policy.inherit=all \u003cnatural user prompt\u003e",
+    "multi turn: first turn uses codex exec without --ephemeral; later turns use codex exec -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo --add-dir \u003cwritable-eval-roots\u003e resume \u003cthread-id\u003e --json with per-turn logs"
+  ],
+  "metric_notes": [
+    "production total tools: 7",
+    "production total command executions: 7",
+    "non-cached input tokens exposed for 6/6 scenarios; aggregate=36239",
+    "CLI comparison gates are intentionally n/a because OpenPlanner has no human CLI baseline variant."
+  ],
+  "production_score": {
+    "recommendation": "prefer_agentops_for_routine_openplanner_operations",
+    "passed": true,
+    "criteria": [
+      {
+        "name": "production_passes_all_scenarios",
+        "passed": true,
+        "details": "6/6 scenarios passed"
+      },
+      {
+        "name": "invalid_inputs_are_final_answer_only",
+        "passed": true,
+        "details": "invalid-input scenarios used no tools, no command executions, and at most one assistant answer"
+      },
+      {
+        "name": "no_forbidden_inspection_or_cli_usage",
+        "passed": true,
+        "details": "no generated-file inspection, generated-path broad search, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
+      },
+      {
+        "name": "aggregate_non_cached_tokens_reported",
+        "passed": true,
+        "details": "6/6 scenarios exposed usage; aggregate non-cached input tokens: 36239"
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "production",
+      "scenario": "create-timed-event",
+      "scenario_title": "Create a timed event",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 7.84,
+      "phase_timings": {
+        "copy_repo_seconds": 0.03,
+        "agent_run_seconds": 7.84,
+        "total_seconds": 7.88
+      },
+      "metrics": {
+        "assistant_calls": 2,
+        "tool_calls": 1,
+        "command_executions": 1,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 45252,
+        "cached_input_tokens": 41216,
+        "non_cached_input_tokens": 4036,
+        "output_tokens": 307,
+        "event_type_counts": {
+          "item.completed": 3,
+          "item.started": 1,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected events in DB and final answer",
+        "events": [
+          {
+            "title": "Standup",
+            "start_at": "2026-04-16T09:00:00Z"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 7.84,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 2,
+            "tool_calls": 1,
+            "command_executions": 1,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 45252,
+            "cached_input_tokens": 41216,
+            "non_cached_input_tokens": 4036,
+            "output_tokens": 307,
+            "event_type_counts": {
+              "item.completed": 3,
+              "item.started": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected events in DB and final answer",
+            "events": [
+              {
+                "title": "Standup",
+                "start_at": "2026-04-16T09:00:00Z"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/create-timed-event/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "create Work Standup timed event",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/create-timed-event/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "agenda-range",
+      "scenario_title": "List a bounded agenda range chronologically",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 9.36,
+      "phase_timings": {
+        "copy_repo_seconds": 0.03,
+        "seed_db_seconds": 0.01,
+        "agent_run_seconds": 9.36,
+        "total_seconds": 9.4
+      },
+      "metrics": {
+        "assistant_calls": 2,
+        "tool_calls": 1,
+        "command_executions": 1,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 45299,
+        "cached_input_tokens": 41216,
+        "non_cached_input_tokens": 4083,
+        "output_tokens": 412,
+        "event_type_counts": {
+          "item.completed": 3,
+          "item.started": 1,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected bounded agenda chronologically",
+        "agenda": [
+          {
+            "kind": "task",
+            "title": "Review notes",
+            "due_date": "2026-04-16"
+          },
+          {
+            "kind": "event",
+            "title": "Standup",
+            "start_at": "2026-04-16T09:00:00Z"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 9.36,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 2,
+            "tool_calls": 1,
+            "command_executions": 1,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 45299,
+            "cached_input_tokens": 41216,
+            "non_cached_input_tokens": 4083,
+            "output_tokens": 412,
+            "event_type_counts": {
+              "item.completed": 3,
+              "item.started": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected bounded agenda chronologically",
+            "agenda": [
+              {
+                "kind": "task",
+                "title": "Review notes",
+                "due_date": "2026-04-16"
+              },
+              {
+                "kind": "event",
+                "title": "Standup",
+                "start_at": "2026-04-16T09:00:00Z"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/agenda-range/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "list bounded agenda range",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/agenda-range/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "complete-task",
+      "scenario_title": "Complete a non-recurring task",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 11.31,
+      "phase_timings": {
+        "copy_repo_seconds": 0.03,
+        "seed_db_seconds": 0.01,
+        "agent_run_seconds": 11.31,
+        "total_seconds": 11.35
+      },
+      "metrics": {
+        "assistant_calls": 3,
+        "tool_calls": 2,
+        "command_executions": 2,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 68538,
+        "cached_input_tokens": 64128,
+        "non_cached_input_tokens": 4410,
+        "output_tokens": 749,
+        "event_type_counts": {
+          "item.completed": 5,
+          "item.started": 2,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected tasks in DB and final answer",
+        "tasks": [
+          {
+            "title": "Review notes"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 11.31,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 3,
+            "tool_calls": 2,
+            "command_executions": 2,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 68538,
+            "cached_input_tokens": 64128,
+            "non_cached_input_tokens": 4410,
+            "output_tokens": 749,
+            "event_type_counts": {
+              "item.completed": 5,
+              "item.started": 2,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected tasks in DB and final answer",
+            "tasks": [
+              {
+                "title": "Review notes"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/complete-task/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "complete seeded non-recurring task",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/complete-task/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "year-first-slash-date",
+      "scenario_title": "Reject a year-first slash date without writing",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 7.59,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "agent_run_seconds": 7.59,
+        "total_seconds": 7.61
+      },
+      "metrics": {
+        "assistant_calls": 1,
+        "tool_calls": 0,
+        "command_executions": 0,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 22371,
+        "cached_input_tokens": 18816,
+        "non_cached_input_tokens": 3555,
+        "output_tokens": 183,
+        "event_type_counts": {
+          "item.completed": 1,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected direct rejection or clarification without DB writes"
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 7.59,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 1,
+            "tool_calls": 0,
+            "command_executions": 0,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 22371,
+            "cached_input_tokens": 18816,
+            "non_cached_input_tokens": 3555,
+            "output_tokens": 183,
+            "event_type_counts": {
+              "item.completed": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected direct rejection or clarification without DB writes"
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/year-first-slash-date/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "Reject a year-first slash date without writing",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/year-first-slash-date/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "mt-clarify-then-create",
+      "scenario_title": "Clarify missing year, then create in a resumed turn",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 11.16,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "agent_run_seconds": 11.16,
+        "total_seconds": 11.18
+      },
+      "metrics": {
+        "assistant_calls": 3,
+        "tool_calls": 1,
+        "command_executions": 1,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 90302,
+        "cached_input_tokens": 78848,
+        "non_cached_input_tokens": 11454,
+        "output_tokens": 626,
+        "event_type_counts": {
+          "item.completed": 4,
+          "item.started": 1,
+          "thread.started": 2,
+          "turn.completed": 2,
+          "turn.started": 2
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected direct rejection or clarification without DB writes; turn 2: expected tasks in DB and final answer",
+        "tasks": [
+          {
+            "title": "Review notes",
+            "due_date": "2026-04-16"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 4.53,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 1,
+            "tool_calls": 0,
+            "command_executions": 0,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 22368,
+            "cached_input_tokens": 18816,
+            "non_cached_input_tokens": 3552,
+            "output_tokens": 156,
+            "event_type_counts": {
+              "item.completed": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected direct rejection or clarification without DB writes"
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-clarify-then-create/turn-1/events.jsonl"
+        },
+        {
+          "turn_index": 2,
+          "wall_seconds": 6.63,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 2,
+            "tool_calls": 1,
+            "command_executions": 1,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 67934,
+            "cached_input_tokens": 60032,
+            "non_cached_input_tokens": 7902,
+            "output_tokens": 470,
+            "event_type_counts": {
+              "item.completed": 3,
+              "item.started": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected tasks in DB and final answer",
+            "tasks": [
+              {
+                "title": "Review notes",
+                "due_date": "2026-04-16"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-clarify-then-create/turn-2/events.jsonl"
+        }
+      ],
+      "prompt_summary": "ask for missing year, then create task",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-clarify-then-create/turn-2/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "mt-list-then-complete",
+      "scenario_title": "List a task, then complete it in a resumed turn",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 14.77,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "seed_db_seconds": 0.01,
+        "agent_run_seconds": 14.77,
+        "total_seconds": 14.8
+      },
+      "metrics": {
+        "assistant_calls": 4,
+        "tool_calls": 2,
+        "command_executions": 2,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 136445,
+        "cached_input_tokens": 127744,
+        "non_cached_input_tokens": 8701,
+        "output_tokens": 1015,
+        "event_type_counts": {
+          "item.completed": 6,
+          "item.started": 2,
+          "thread.started": 2,
+          "turn.completed": 2,
+          "turn.started": 2
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected tasks in DB and final answer; turn 2: expected tasks in DB and final answer",
+        "tasks": [
+          {
+            "title": "Review notes"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 8.71,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 2,
+            "tool_calls": 1,
+            "command_executions": 1,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 45188,
+            "cached_input_tokens": 41216,
+            "non_cached_input_tokens": 3972,
+            "output_tokens": 395,
+            "event_type_counts": {
+              "item.completed": 3,
+              "item.started": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected tasks in DB and final answer",
+            "tasks": [
+              {
+                "title": "Review notes"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-list-then-complete/turn-1/events.jsonl"
+        },
+        {
+          "turn_index": 2,
+          "wall_seconds": 6.06,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 2,
+            "tool_calls": 1,
+            "command_executions": 1,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 91257,
+            "cached_input_tokens": 86528,
+            "non_cached_input_tokens": 4729,
+            "output_tokens": 620,
+            "event_type_counts": {
+              "item.completed": 3,
+              "item.started": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected tasks in DB and final answer",
+            "tasks": [
+              {
+                "title": "Review notes"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-list-then-complete/turn-2/events.jsonl"
+        }
+      ],
+      "prompt_summary": "list task, then complete it",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/mt-list-then-complete/turn-2/events.jsonl"
+    }
+  ],
+  "raw_logs_committed": false,
+  "raw_logs_note": "Raw codex exec event logs and stderr files were retained under \u003crun-root\u003e during execution and intentionally not committed.",
+  "token_usage_caveat": "Token metrics come from codex exec turn.completed usage events when exposed; unavailable usage is recorded as not exposed.",
+  "comparison_status": "not applicable: OpenPlanner has no human CLI baseline variant; this report scores the production AgentOps surface only"
+}

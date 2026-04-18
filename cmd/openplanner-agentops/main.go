@@ -51,7 +51,12 @@ func runPlanning(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 
-	result, err := agentops.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: *databasePath}, request)
+	resolvedDatabasePath := *databasePath
+	if resolvedDatabasePath == "" {
+		resolvedDatabasePath = os.Getenv("OPENPLANNER_DATABASE_PATH")
+	}
+
+	result, err := agentops.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: resolvedDatabasePath}, request)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "run planning task: %v\n", err)
 		return 1

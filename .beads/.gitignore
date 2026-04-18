@@ -14,6 +14,10 @@ daemon.*
 # Interactions log (runtime, not versioned)
 interactions.jsonl
 
+# JSONL export/backup from Dolt-backed Beads state.
+# Embedded mode stores authoritative issue data in Dolt, not this file.
+issues.jsonl
+
 # Push state (runtime, per-machine)
 push-state.json
 

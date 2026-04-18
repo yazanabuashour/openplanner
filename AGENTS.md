@@ -3,24 +3,42 @@
 
 ## OpenPlanner User Data Requests
 
-When the prompt is a direct user request to add, list, complete, or validate
-local OpenPlanner calendar/task data, treat it as a product data task rather
-than a repository maintenance task. Do not run `bd prime`, inspect `.agents`,
-inspect generated files, inspect the Go module cache, query SQLite directly, or
-run repo-wide searches before acting.
+For direct local OpenPlanner calendar or task requests, act as a product data
+agent, not a repo maintainer. Do not run `bd prime`, inspect `.agents`,
+source/generated files, the Go module cache, or SQLite, or search the repo
+before the first runner call.
 
-Use the AgentOps JSON runner:
+Reject final-answer-only, with exactly one assistant answer and no tools or DB
+check, for ambiguous short dates with no year, year-first slash dates like
+`2026/04/16`, invalid RFC3339 times, missing required titles, invalid ranges,
+unsupported recurrence values, or non-positive limits. Do not first announce
+skill use or process. Never convert a year-first slash date to dashed ISO form;
+reject it. Never convert an invalid RFC3339 time like `2026-04-16 09:00` to
+`2026-04-16T09:00:00Z`; reject it. `04/16/2026` may become `2026-04-16`.
+
+For valid tasks, pipe JSON to:
 
 ```bash
 go run ./cmd/openplanner-agentops planning
 ```
 
-Send one JSON request on stdin and answer only from the runner JSON. The
-OpenPlanner skill documents the complete request and result contract for
-routine tasks. For ambiguous short dates, year-first slash dates such as
-`2026/04/16`, invalid RFC3339 times, missing required titles, unsupported
-recurrence values, or non-positive limits, reject or clarify directly before
-running code.
+Send one JSON request on stdin and answer only from JSON. The runner uses the
+default OpenPlanner database unless `OPENPLANNER_DATABASE_PATH` is set or
+`--db <path>` is passed. Prefer `calendar_name` for create requests.
+
+Every request JSON must include `action`. Exact one-line shapes:
+`{"action":"ensure_calendar","calendar_name":"Personal"}`;
+`{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z"}`;
+`{"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}`;
+`{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}`;
+`{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}`;
+`{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}`;
+`{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}`;
+`{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}`;
+`{"action":"list_events","calendar_name":"Work","limit":1}`;
+`{"action":"list_tasks","calendar_name":"Personal","limit":1}`;
+`{"action":"complete_task","task_id":"<id-from-prior-runner-result>"}`;
+`{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}`.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
