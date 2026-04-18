@@ -6,8 +6,13 @@
 // require a separate server for the default SDK flow.
 //
 // For common local planning tasks, prefer the Client helper methods
-// EnsureCalendar, CreateEvent, CreateTask, ListAgenda, ListEvents, ListTasks,
-// and CompleteTask before falling back to generated OpenAPI method names.
+// EnsureCalendar, CreateEvent, CreateTask, ListAgenda, ListCalendars,
+// ListEvents, ListTasks, and CompleteTask before falling back to generated
+// OpenAPI method names.
+//
+// Agent-driven workflows should use the AgentOps JSON runner under
+// cmd/openplanner-agentops. The SDK remains the Go developer surface; the
+// generated client remains the API-contract substrate.
 //
 // When Options.DatabasePath is empty, OpenPlanner stores SQLite data at
 // ${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db.

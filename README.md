@@ -1,6 +1,6 @@
 # openplanner
 
-`openplanner` is a spec-first local planning SDK for agent-facing calendar and task workflows. The public release surface is an embeddable Go module built around a checked-in OpenAPI contract, generated Go client, in-process local transport, and SQLite storage.
+`openplanner` is a spec-first local planning runtime for agent-facing calendar and task workflows. The public release surface is an embeddable Go SDK plus a machine-facing AgentOps JSON runner, both built on a checked-in OpenAPI contract, generated Go client, in-process local transport, and SQLite storage.
 
 ## Install in your Go project
 
@@ -65,10 +65,17 @@ By default, `sdk.OpenLocal(sdk.Options{})` stores SQLite data at `${XDG_DATA_HOM
 
 For common local planning tasks, prefer the ergonomic helper methods on the SDK
 client over generated OpenAPI method names: `EnsureCalendar`, `CreateEvent`,
-`CreateTask`, `ListAgenda`, `ListEvents`, `ListTasks`, and `CompleteTask`. The
-embedded generated client remains available for advanced API-contract work.
+`CreateTask`, `ListAgenda`, `ListCalendars`, `ListEvents`, `ListTasks`, and
+`CompleteTask`. The embedded generated client remains available as the
+API-contract substrate for advanced compatibility work.
 
-`cmd/openplanner` is a lightweight bootstrap banner for maintainers and debugging. It is not the primary product surface.
+For skill-driven agent workflows, use the JSON runner instead of generated
+request builders or ad hoc command discovery:
+
+```bash
+printf '%s\n' '{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z"}' \
+  | go run ./cmd/openplanner-agentops planning
+```
 
 ## Runtime model
 
@@ -90,12 +97,13 @@ Until `v0.1.0` exists, local development should use a local `replace` directive,
 - [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
 - [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
 - [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows without mixing comparison variants into the production skill.
+- [agentops](agentops) contains the JSON-friendly task facade for production agent workflows.
+- [cmd/openplanner-agentops](cmd/openplanner-agentops) contains the machine-facing JSON runner for agents.
 - [openapi/openapi.yaml](openapi/openapi.yaml) is the source-of-truth API contract.
 - [sdk/generated](sdk/generated) contains the checked-in generated Go client types and operations.
 - [sdk](sdk) opens the generated client against the in-process local transport.
 - [skills/openplanner/SKILL.md](skills/openplanner/SKILL.md) documents the Agent Skills-compatible OpenPlanner install and usage path.
 - [examples/openplanner/agenda](examples/openplanner/agenda) demonstrates a local recurring event/task workflow.
-- [cmd/openplanner](cmd/openplanner) contains the lightweight CLI entrypoint.
 - [LICENSE](LICENSE) defines the project license.
 
 ## Development
@@ -106,10 +114,10 @@ Install the pinned toolchain with:
 mise install
 ```
 
-Inspect the bootstrap CLI with:
+Exercise the AgentOps runner with:
 
 ```bash
-go run ./cmd/openplanner
+printf '%s\n' '{"action":"validate"}' | go run ./cmd/openplanner-agentops planning
 ```
 
 Run the local quality gates with:

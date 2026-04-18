@@ -1,121 +1,163 @@
-# Planning Task Recipes
+# Planning Task JSON Recipes
 
-Use these snippets after opening the local runtime:
+Pipe one request object into the production runner:
 
-```go
-api, err := sdk.OpenLocal(sdk.Options{})
-if err != nil {
-	log.Fatal(err)
-}
-defer api.Close()
-ctx := context.Background()
+```bash
+printf '%s\n' '<json>' | go run ./cmd/openplanner-agentops planning
+```
+
+For an isolated database used in tests or manual debugging:
+
+```bash
+printf '%s\n' '<json>' | go run ./cmd/openplanner-agentops planning --db openplanner-test.db
 ```
 
 ## Ensure A Calendar
 
-```go
-calendar, err := api.EnsureCalendar(ctx, sdk.CalendarInput{
-	Name: "Personal",
-})
-if err != nil {
-	log.Fatal(err)
-}
-log.Printf("%s %s", calendar.Calendar.ID, calendar.Status)
+```json
+{"action":"ensure_calendar","calendar_name":"Personal"}
 ```
 
-## Add Timed Or All-Day Events
+Optional calendar fields are `description` and `color` (`#RRGGBB`).
 
-```go
-startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.Local)
-endAt := startAt.Add(time.Hour)
-event, err := api.CreateEvent(ctx, sdk.EventInput{
-	CalendarID: calendar.Calendar.ID,
-	Title:      "Standup",
-	StartAt:    &startAt,
-	EndAt:      &endAt,
-})
-if err != nil {
-	log.Fatal(err)
+## Add Events
+
+Timed event:
+
+```json
+{
+  "action": "create_event",
+  "calendar_name": "Work",
+  "title": "Standup",
+  "start_at": "2026-04-16T09:00:00Z",
+  "end_at": "2026-04-16T10:00:00Z"
 }
-log.Printf("created event %s", event.ID)
 ```
 
-```go
-startDate := "2026-04-17"
-event, err := api.CreateEvent(ctx, sdk.EventInput{
-	CalendarID: calendar.Calendar.ID,
-	Title:      "Planning day",
-	StartDate:  &startDate,
-})
-if err != nil {
-	log.Fatal(err)
+All-day event:
+
+```json
+{
+  "action": "create_event",
+  "calendar_name": "Personal",
+  "title": "Planning day",
+  "start_date": "2026-04-17"
 }
-log.Printf("created all-day event %s", event.ID)
+```
+
+Recurring event:
+
+```json
+{
+  "action": "create_event",
+  "calendar_name": "Work",
+  "title": "Daily standup",
+  "start_at": "2026-04-16T09:00:00Z",
+  "end_at": "2026-04-16T09:30:00Z",
+  "recurrence": {"frequency":"daily","count":5}
+}
 ```
 
 ## Add Tasks
 
-```go
-dueDate := "2026-04-16"
-count := int32(5)
-task, err := api.CreateTask(ctx, sdk.TaskInput{
-	CalendarID: calendar.Calendar.ID,
-	Title:      "Review notes",
-	DueDate:    &dueDate,
-	Recurrence: &sdk.RecurrenceRule{
-		Frequency: sdk.RecurrenceFrequencyDaily,
-		Count:     &count,
-	},
-})
-if err != nil {
-	log.Fatal(err)
-}
-log.Printf("created task %s", task.ID)
-```
+Dated task:
 
-## Query Agenda
-
-```go
-from := time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
-to := from.AddDate(0, 0, 7)
-agenda, err := api.ListAgenda(ctx, sdk.AgendaOptions{
-	From:  from,
-	To:    to,
-	Limit: 200,
-})
-if err != nil {
-	log.Fatal(err)
-}
-for _, item := range agenda.Items {
-	log.Printf("%s %s %s", item.Kind, item.OccurrenceKey, item.Title)
+```json
+{
+  "action": "create_task",
+  "calendar_name": "Personal",
+  "title": "Review notes",
+  "due_date": "2026-04-16"
 }
 ```
 
-## Complete A Task Occurrence
+Timed task:
 
-Use an empty completion input for a non-recurring task:
-
-```go
-_, err := api.CompleteTask(ctx, task.ID, sdk.TaskCompletionInput{})
-if err != nil {
-	log.Fatal(err)
+```json
+{
+  "action": "create_task",
+  "calendar_name": "Work",
+  "title": "Send summary",
+  "due_at": "2026-04-16T11:00:00Z"
 }
 ```
 
-Use the exact occurrence date for a recurring date-based task:
+Recurring task:
 
-```go
-occurrenceDate := "2026-04-16"
-_, err := api.CompleteTask(ctx, task.ID, sdk.TaskCompletionInput{
-	OccurrenceDate: &occurrenceDate,
-})
-if err != nil {
-	log.Fatal(err)
+```json
+{
+  "action": "create_task",
+  "calendar_name": "Personal",
+  "title": "Review notes",
+  "due_date": "2026-04-16",
+  "recurrence": {"frequency":"daily","count":5}
 }
 ```
 
-## Date Handling
+Recurrence fields are `frequency`, `interval`, `count`, `until_at`,
+`until_date`, `by_weekday`, and `by_month_day`. Frequencies are `daily`,
+`weekly`, and `monthly`. Weekdays use `MO`, `TU`, `WE`, `TH`, `FR`, `SA`, and
+`SU`.
 
-If a user gives a short date like `04/16`, resolve the year from the
-conversation or ask for it when the context is ambiguous. Pass OpenPlanner an
-explicit `YYYY-MM-DD` date for all-day events and date-based tasks.
+## Query Planning Data
+
+Agenda window:
+
+```json
+{
+  "action": "list_agenda",
+  "from": "2026-04-16T00:00:00Z",
+  "to": "2026-04-23T00:00:00Z",
+  "limit": 200
+}
+```
+
+List events:
+
+```json
+{"action":"list_events","calendar_name":"Work","limit":25}
+```
+
+List tasks:
+
+```json
+{"action":"list_tasks","calendar_name":"Personal","limit":25}
+```
+
+Use `calendar_id` only when the user or a previous runner result already
+provided an ID.
+
+## Complete Tasks
+
+Non-recurring task:
+
+```json
+{"action":"complete_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+```
+
+Recurring date-based task:
+
+```json
+{
+  "action": "complete_task",
+  "task_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "occurrence_date": "2026-04-16"
+}
+```
+
+Recurring timed task:
+
+```json
+{
+  "action": "complete_task",
+  "task_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "occurrence_at": "2026-04-16T09:00:00Z"
+}
+```
+
+## Validation
+
+Reject without running code when a request has an ambiguous short date, a
+year-first slash date, a non-positive limit, a missing required title, or an
+unsupported recurrence value. The runner also validates requests before opening
+the database and returns JSON rejections with `rejected: true`.

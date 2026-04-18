@@ -1,6 +1,27 @@
 - For all committed docs, reports, and artifact references, use repo-relative paths or neutral repo-relative placeholders. Never use machine-absolute filesystem paths.
 - Do work on the current branch. Do not create or switch to another branch unless explicitly instructed.
 
+## OpenPlanner User Data Requests
+
+When the prompt is a direct user request to add, list, complete, or validate
+local OpenPlanner calendar/task data, treat it as a product data task rather
+than a repository maintenance task. Do not run `bd prime`, inspect `.agents`,
+inspect generated files, inspect the Go module cache, query SQLite directly, or
+run repo-wide searches before acting.
+
+Use the AgentOps JSON runner:
+
+```bash
+go run ./cmd/openplanner-agentops planning
+```
+
+Send one JSON request on stdin and answer only from the runner JSON. The
+OpenPlanner skill documents the complete request and result contract for
+routine tasks. For ambiguous short dates, year-first slash dates such as
+`2026/04/16`, invalid RFC3339 times, missing required titles, unsupported
+recurrence values, or non-positive limits, reject or clarify directly before
+running code.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
@@ -52,4 +73,3 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" after review approval - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
-

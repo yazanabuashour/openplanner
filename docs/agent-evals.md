@@ -1,42 +1,64 @@
-# Agent Evaluation Plan
+# Agent Evaluation Protocol
 
-This project evaluates agent behavior against the same surface a real
-OpenPlanner agent receives. The production eval must use only the installed
-`skills/openplanner` payload and a fresh session. Do not add hidden evaluator
-instructions that tell the agent which API to call unless those instructions are
-also present in the production skill.
+OpenPlanner agent evals measure the same production skill a real agent receives.
+Do not add hidden evaluator-only instructions to improve a result; if an
+instruction is needed, put it in the production skill first.
 
-## Primary Production Eval
+## Active Surface
 
-- Start from a fresh agent session with the production `openplanner` skill.
-- Provide natural user prompts such as `add standup tomorrow at 9 for an hour`
-  or `show my agenda for next week`.
-- Use the normal local Go/tool environment and default OpenPlanner data path.
-- Judge success by final database state, agenda verification, duplicate calendar
-  behavior, tool calls, assistant calls, wall time, non-cache input tokens, and
-  whether the agent read generated files or the Go module cache.
-- The expected production path is `sdk.OpenLocal(...)` plus the ergonomic
-  planning helpers on `sdk.Client`.
+- `production`: the installed `skills/openplanner` AgentOps JSON runner skill.
 
-## Isolated Variants
+The SDK and generated client remain supported Go developer/runtime APIs, but
+they are not production agent-facing eval variants. Comparison variants, if
+added later, must live under eval assets or archives and must not be mixed into
+the production skill.
 
-Keep comparison variants outside the production skill so the real skill stays
-opinionated and narrow.
+## Scenario Coverage
 
-- Baseline A: current or archived generated-client skill surface.
-- Variant B: production code-first SDK skill surface.
-- Variant C: CLI-oriented harness or alternate skill payload, if a CLI is added.
+The production matrix covers routine local planning tasks:
 
-Each variant should have its own skill payload or harness instructions. Do not
-combine generated-client, SDK, and CLI recipes in the same production skill.
+- calendar ensure and duplicate-calendar avoidance
+- timed and all-day event creation
+- dated, timed, and recurring task creation
+- bounded agenda listing with chronological output
+- event and task listing with limits and calendar filters
+- task completion for non-recurring and recurring occurrences
+- invalid input rejection for ambiguous short dates, year-first slash dates,
+  invalid RFC3339 values, invalid ranges, unsupported recurrence, missing
+  titles, and non-positive limits
 
-## Core Scenarios
+Every scenario should use a fresh isolated repo copy, a fresh local database
+path, and reduced JSON/Markdown artifacts. Raw logs are not committed; reduced
+reports refer to them with `<run-root>` placeholders. The copied repo omits root
+`AGENTS.md`, stale `.agents` content, eval docs, reports, and harness code
+before installing the selected production skill so repo-level maintainer
+instructions do not contaminate user-data tasks.
 
-- Create a calendar from a natural-language prompt and repeat the request
-  without creating a duplicate calendar.
-- Add timed and all-day events, then verify them through an agenda range.
-- Add dated and timed tasks, including at least one recurring task.
-- Complete a non-recurring task and a specific recurring task occurrence.
-- List a bounded agenda range and verify chronological output.
-- Reject or clarify ambiguous short dates when the year cannot be inferred.
-- Avoid generated client files and module cache reads for routine workflows.
+## Metrics
+
+Reports should include:
+
+- database verification and runner-answer verification
+- command/tool counts, wall time, non-cache input tokens, and output tokens when
+  the harness is running real agent sessions
+- generated-file inspection
+- generated paths surfaced from broad search
+- broad repo search
+- Go module-cache inspection
+- human-facing CLI usage
+- direct SQLite access
+- configured parallelism and actual harness elapsed seconds
+
+The production path is expected to call:
+
+```bash
+go run ./cmd/openplanner-agentops planning
+```
+
+Routine production runs should not inspect generated files, module caches, or
+SQLite directly, and should not use human-facing command discovery.
+
+## Current Reports
+
+Current reduced reports belong under `docs/agent-eval-results/`. Historical
+iteration artifacts should be archived under `docs/agent-eval-results/archive/`.

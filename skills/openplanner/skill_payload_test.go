@@ -44,6 +44,41 @@ func TestSkillMarkdownLinksReferenceInstalledFiles(t *testing.T) {
 	}
 }
 
+func TestProductionSkillUsesAgentOpsRunner(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile("SKILL.md")
+	if err != nil {
+		t.Fatalf("read skill: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"go run ./cmd/openplanner-agentops planning",
+		"calendar_name",
+		"references/planning.md",
+		"Agenda results are already",
+		"2026/04/16",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"Generated Client Fallback",
+		"sdk/generated",
+		"temporary Go module",
+		"sqlite3",
+		"SELECT ",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("skill contains forbidden text %q", forbidden)
+		}
+	}
+	if regexp.MustCompile(`go run \./cmd/openplanner(\s|$)`).MatchString(text) {
+		t.Fatal("skill contains stale human-facing cmd/openplanner runner guidance")
+	}
+}
+
 func shouldSkipLinkTarget(target string) bool {
 	return target == "" ||
 		strings.HasPrefix(target, "#") ||

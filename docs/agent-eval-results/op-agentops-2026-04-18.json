@@ -1,0 +1,89 @@
+{
+  "issue": "op-agentops",
+  "date": "2026-04-18",
+  "harness": "openplanner-agentops-runner",
+  "parallelism": 4,
+  "harness_elapsed_seconds": 5.000266958,
+  "results": [
+    {
+      "scenario": "ensure-calendar",
+      "scenario_title": "Ensure a calendar twice without duplicates",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 3.7,
+      "command_executions": 2,
+      "verification": {
+        "passed": true,
+        "details": "expected created then already_exists"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/ensure-calendar/raw.log"
+    },
+    {
+      "scenario": "create-event",
+      "scenario_title": "Create a timed event with calendar-name ensure",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 3.37,
+      "command_executions": 1,
+      "verification": {
+        "passed": true,
+        "details": "expected one created event"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/create-event/raw.log"
+    },
+    {
+      "scenario": "create-task",
+      "scenario_title": "Create a dated task with calendar-name ensure",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 3.01,
+      "command_executions": 1,
+      "verification": {
+        "passed": true,
+        "details": "expected one dated task"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/create-task/raw.log"
+    },
+    {
+      "scenario": "agenda-range",
+      "scenario_title": "List a bounded agenda range chronologically",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 4.12,
+      "command_executions": 3,
+      "verification": {
+        "passed": true,
+        "details": "expected date task then timed event"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/agenda-range/raw.log"
+    },
+    {
+      "scenario": "complete-task",
+      "scenario_title": "Complete a non-recurring task",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 1.99,
+      "command_executions": 2,
+      "verification": {
+        "passed": true,
+        "details": "expected completed task write"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/complete-task/raw.log"
+    },
+    {
+      "scenario": "invalid-date",
+      "scenario_title": "Reject an ambiguous short date without writing",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 1.28,
+      "command_executions": 1,
+      "verification": {
+        "passed": true,
+        "details": "expected date validation rejection"
+      },
+      "raw_log_artifact_reference": "\u003crun-root\u003e/invalid-date/raw.log"
+    }
+  ],
+  "raw_logs_committed": false,
+  "raw_logs_note": "Raw logs are stored outside the repo and referenced with \u003crun-root\u003e placeholders."
+}

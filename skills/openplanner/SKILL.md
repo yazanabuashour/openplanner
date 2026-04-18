@@ -1,93 +1,71 @@
 ---
 name: openplanner
-description: Manage local calendar and task workflows through OpenPlanner's ergonomic in-process Go SDK. Use this skill when an agent needs to create calendars, schedule events or tasks, query agenda ranges, or complete task occurrences without starting a daemon or calling a hosted service.
+description: Manage local calendar and task workflows through OpenPlanner's AgentOps JSON runner. Use this skill when an agent needs to create calendars, schedule events or tasks, query agenda ranges, list events/tasks, or complete task occurrences without starting a daemon or calling a hosted service.
 license: MIT
 compatibility: Requires Go 1.26.2+ and local filesystem access for SQLite storage. OpenPlanner runs in process and does not require a daemon, localhost service, auth flow, or runtime network access.
 ---
 
-# OpenPlanner Agent SDK
+# OpenPlanner AgentOps
 
-Use this skill for local-first planning tasks. The production agent path is the
-hand-written SDK facade on top of `sdk.OpenLocal(...)`, not raw generated
-OpenAPI request builders.
+Use this skill for local-first planning tasks. The production agent interface is
+the machine-facing JSON runner:
 
-## Default Path
-
-- Install from the current development line until a release tag exists:
-  `go get github.com/yazanabuashour/openplanner@main`.
-- Import `github.com/yazanabuashour/openplanner/sdk`.
-- Open local data with `sdk.OpenLocal(sdk.Options{})`.
-- Use `EnsureCalendar`, `CreateEvent`, `CreateTask`, `ListAgenda`,
-  `ListEvents`, `ListTasks`, and `CompleteTask` for routine planning work.
-- Use `sdk.Options{DatabasePath: "..."}` only when the user names a specific
-  database or you are using an isolated test database.
-
-Do not inspect `sdk/generated`, generated request builders, the Go module cache,
-or large dependency directories for routine add/list/agenda/complete tasks. Use
-targeted repo searches only when the SDK facade does not cover the user's ask.
-
-## Common Workflow
-
-```go
-package main
-
-import (
-	"context"
-	"log"
-	"time"
-
-	"github.com/yazanabuashour/openplanner/sdk"
-)
-
-func main() {
-	api, err := sdk.OpenLocal(sdk.Options{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer api.Close()
-
-	ctx := context.Background()
-	calendar, err := api.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Personal"})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.Local)
-	endAt := startAt.Add(time.Hour)
-	if _, err := api.CreateEvent(ctx, sdk.EventInput{
-		CalendarID: calendar.Calendar.ID,
-		Title:      "Standup",
-		StartAt:    &startAt,
-		EndAt:      &endAt,
-	}); err != nil {
-		log.Fatal(err)
-	}
-
-	agenda, err := api.ListAgenda(ctx, sdk.AgendaOptions{
-		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local),
-		To:   time.Date(2026, 4, 17, 0, 0, 0, 0, time.Local),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("agenda items=%d", len(agenda.Items))
-}
+```bash
+go run ./cmd/openplanner-agentops planning
 ```
 
-Use `EnsureCalendar` before writing events or tasks. It returns `created`,
-`already_exists`, or `updated` and avoids duplicate calendar setup.
+Send one JSON request on stdin and answer only from the JSON result on stdout.
+Use the default database path unless the user names a specific database or you
+are using an isolated test database; for tests/manual debugging, pass
+`--db <path>`.
 
-## Task And Agenda Recipes
+Supported routine actions are:
 
-Copyable task snippets live at [references/planning.md](references/planning.md).
-Use those examples for all-day events, timed tasks, recurring tasks, agenda
-windows, and task completion.
+- `ensure_calendar`
+- `create_event`
+- `create_task`
+- `list_agenda`
+- `list_events`
+- `list_tasks`
+- `complete_task`
+- `validate`
 
-## Generated Client Fallback
+For event and task creation, prefer `calendar_name`. The runner ensures that
+calendar internally so agents do not need to discover or shuttle calendar IDs.
 
-The generated OpenAPI client remains embedded on `sdk.Client` for advanced
-API-contract work, HTTP compatibility checks, or endpoints not yet covered by
-the SDK facade. Do not start there for common agent tasks.
+For unsupported OpenPlanner workflows, say the production AgentOps skill does
+not support that workflow yet. Do not switch to another interface unless the
+user explicitly asks for one.
 
-See [the reference guide](references/REFERENCE.md) for runtime details and
-entrypoints.
+Do not write local OpenPlanner data through SQLite directly. Do not inspect
+generated API bindings, generated request builders, the Go module cache, or
+large dependency directories for routine planning tasks. The linked reference is
+the routine task contract; do not inspect source files, tests, generated code,
+or module-cache docs to rediscover request/result shapes before the first task
+run. Only search the repository if the AgentOps runner fails in a way that
+requires debugging the local checkout.
+
+## Runner Pattern
+
+Use this shape for supported tasks, changing only the JSON payload:
+
+```bash
+printf '%s\n' '{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z"}' \
+  | go run ./cmd/openplanner-agentops planning
+```
+
+Use strict `YYYY-MM-DD` date-only values for all-day events, date-based tasks,
+and occurrence dates. Use RFC3339 values for timed fields such as `start_at`,
+`end_at`, `due_at`, `from`, `to`, and `occurrence_at`.
+
+If the user gives an ambiguous short date like `04/16` without enough year
+context, ask for the year before writing. If the user gives a year-first slash
+date such as `2026/04/16`, reject it instead of rewriting it. Explicit
+month/day/year dates with a year, such as `04/16/2026`, may be converted to
+`YYYY-MM-DD`.
+
+When reporting results, answer from JSON `writes`, `calendars`, `events`,
+`tasks`, `agenda`, or `rejection_reason`. Agenda results are already
+chronologically ordered.
+
+Copyable request examples live at [references/planning.md](references/planning.md).

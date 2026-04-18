@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/yazanabuashour/openplanner/sdk"
-	"github.com/yazanabuashour/openplanner/sdk/generated"
 )
 
 func main() {
@@ -34,9 +33,7 @@ func main() {
 	}()
 
 	ctx := context.Background()
-	calendar, _, err := client.CalendarsAPI.CreateCalendar(ctx).CreateCalendarRequest(generated.CreateCalendarRequest{
-		Name: "Personal",
-	}).Execute()
+	calendar, err := client.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Personal"})
 	if err != nil {
 		panic(err)
 	}
@@ -45,41 +42,41 @@ func main() {
 	endAt := startAt.Add(time.Hour)
 	count := int32(2)
 
-	_, _, err = client.EventsAPI.CreateEvent(ctx).CreateEventRequest(generated.CreateEventRequest{
-		CalendarId: calendar.Id,
+	_, err = client.CreateEvent(ctx, sdk.EventInput{
+		CalendarID: calendar.Calendar.ID,
 		Title:      "Standup",
 		StartAt:    &startAt,
 		EndAt:      &endAt,
-		Recurrence: &generated.RecurrenceRule{
-			Frequency: generated.RECURRENCEFREQUENCY_DAILY,
+		Recurrence: &sdk.RecurrenceRule{
+			Frequency: sdk.RecurrenceFrequencyDaily,
 			Count:     &count,
 		},
-	}).Execute()
+	})
 	if err != nil {
 		panic(err)
 	}
 
 	dueDate := "2026-04-16"
-	_, _, err = client.TasksAPI.CreateTask(ctx).CreateTaskRequest(generated.CreateTaskRequest{
-		CalendarId: calendar.Id,
+	_, err = client.CreateTask(ctx, sdk.TaskInput{
+		CalendarID: calendar.Calendar.ID,
 		Title:      "Review notes",
 		DueDate:    &dueDate,
-		Recurrence: &generated.RecurrenceRule{
-			Frequency: generated.RECURRENCEFREQUENCY_DAILY,
+		Recurrence: &sdk.RecurrenceRule{
+			Frequency: sdk.RecurrenceFrequencyDaily,
 			Count:     &count,
 		},
-	}).Execute()
+	})
 	if err != nil {
 		panic(err)
 	}
 
-	agenda, _, err := client.AgendaAPI.ListAgenda(ctx).
-		From(time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)).
-		To(time.Date(2026, 4, 18, 0, 0, 0, 0, time.UTC)).
-		Execute()
+	agenda, err := client.ListAgenda(ctx, sdk.AgendaOptions{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 18, 0, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("calendar=%s agendaItems=%d\n", calendar.Id, len(agenda.Items))
+	fmt.Printf("calendar=%s agendaItems=%d\n", calendar.Calendar.ID, len(agenda.Items))
 }

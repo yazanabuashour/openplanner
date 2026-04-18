@@ -118,6 +118,27 @@ func (client *Client) ListEvents(ctx context.Context, options ListOptions) (Page
 	}, nil
 }
 
+func (client *Client) ListCalendars(ctx context.Context, options ListOptions) (Page[Calendar], error) {
+	if err := checkContext(ctx); err != nil {
+		return Page[Calendar]{}, err
+	}
+	service, err := client.localService()
+	if err != nil {
+		return Page[Calendar]{}, err
+	}
+	page, err := service.ListCalendars(domain.PageParams{
+		Cursor: options.Cursor,
+		Limit:  options.Limit,
+	})
+	if err != nil {
+		return Page[Calendar]{}, err
+	}
+	return Page[Calendar]{
+		Items:      fromDomainCalendars(page.Items),
+		NextCursor: cloneString(page.NextCursor),
+	}, nil
+}
+
 func (client *Client) CreateTask(ctx context.Context, input TaskInput) (Task, error) {
 	if err := checkContext(ctx); err != nil {
 		return Task{}, err
@@ -326,6 +347,14 @@ func fromDomainCalendar(calendar domain.Calendar) Calendar {
 		CreatedAt:   calendar.CreatedAt,
 		UpdatedAt:   calendar.UpdatedAt,
 	}
+}
+
+func fromDomainCalendars(calendars []domain.Calendar) []Calendar {
+	out := make([]Calendar, 0, len(calendars))
+	for _, calendar := range calendars {
+		out = append(out, fromDomainCalendar(calendar))
+	}
+	return out
 }
 
 func fromDomainEvent(event domain.Event) Event {
