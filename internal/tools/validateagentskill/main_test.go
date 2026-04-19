@@ -63,6 +63,7 @@ func validSkillMarkdown() string {
 	return `---
 name: openplanner
 description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner.
+metadata: { openplanner.runner: "openplanner planning" }
 ---
 
 Run openplanner planning.

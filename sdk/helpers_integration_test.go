@@ -184,6 +184,92 @@ func TestLocalClientPlanningHelpers(t *testing.T) {
 	}
 }
 
+func TestLocalClientUpdatePatchHelpers(t *testing.T) {
+	t.Parallel()
+
+	client := openTempClient(t)
+	ctx := context.Background()
+
+	description := "Planning"
+	color := "#445566"
+	calendarWrite, err := client.EnsureCalendar(ctx, sdk.CalendarInput{
+		Name:        "Work",
+		Description: &description,
+		Color:       &color,
+	})
+	if err != nil {
+		t.Fatalf("EnsureCalendar(): %v", err)
+	}
+
+	calendar, err := client.UpdateCalendar(ctx, calendarWrite.Calendar.ID, sdk.CalendarPatchInput{
+		Description: sdk.SetPatch("Delivery"),
+		Color:       sdk.ClearPatch[string](),
+	})
+	if err != nil {
+		t.Fatalf("UpdateCalendar(): %v", err)
+	}
+	if calendar.Description == nil || *calendar.Description != "Delivery" || calendar.Color != nil {
+		t.Fatalf("calendar = %#v, want description set and color cleared", calendar)
+	}
+
+	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(time.Hour)
+	count := int32(2)
+	event, err := client.CreateEvent(ctx, sdk.EventInput{
+		CalendarID: calendar.ID,
+		Title:      "Standup",
+		StartAt:    &startAt,
+		EndAt:      &endAt,
+		Recurrence: &sdk.RecurrenceRule{
+			Frequency: sdk.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	startDate := "2026-04-17"
+	updatedEvent, err := client.UpdateEvent(ctx, event.ID, sdk.EventPatchInput{
+		Location:   sdk.SetPatch("Room 12"),
+		StartAt:    sdk.ClearPatch[time.Time](),
+		EndAt:      sdk.ClearPatch[time.Time](),
+		StartDate:  sdk.SetPatch(startDate),
+		Recurrence: sdk.ClearPatch[sdk.RecurrenceRule](),
+	})
+	if err != nil {
+		t.Fatalf("UpdateEvent(): %v", err)
+	}
+	if updatedEvent.Location == nil || *updatedEvent.Location != "Room 12" || updatedEvent.StartAt != nil || updatedEvent.StartDate == nil || updatedEvent.Recurrence != nil {
+		t.Fatalf("event = %#v, want set location, all-day date, and cleared recurrence", updatedEvent)
+	}
+
+	dueDate := "2026-04-16"
+	task, err := client.CreateTask(ctx, sdk.TaskInput{
+		CalendarID: calendar.ID,
+		Title:      "Review",
+		DueDate:    &dueDate,
+		Recurrence: &sdk.RecurrenceRule{
+			Frequency: sdk.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+	dueAt := time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC)
+	updatedTask, err := client.UpdateTask(ctx, task.ID, sdk.TaskPatchInput{
+		DueDate:    sdk.ClearPatch[string](),
+		DueAt:      sdk.SetPatch(dueAt),
+		Recurrence: sdk.ClearPatch[sdk.RecurrenceRule](),
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask(): %v", err)
+	}
+	if updatedTask.DueDate != nil || updatedTask.DueAt == nil || !updatedTask.DueAt.Equal(dueAt) || updatedTask.Recurrence != nil {
+		t.Fatalf("task = %#v, want due mode switch and cleared recurrence", updatedTask)
+	}
+}
+
 func openTempClient(t *testing.T) *sdk.Client {
 	t.Helper()
 

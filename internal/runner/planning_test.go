@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -292,6 +293,182 @@ func TestRunPlanningTaskPreservesFractionalSecondTimes(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskUpdateActionsAndClearSemantics(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	count := int32(2)
+
+	calendar, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Work",
+		Description:  stringPtr("Planning"),
+		Color:        stringPtr("#334455"),
+	})
+	if err != nil {
+		t.Fatalf("ensure calendar: %v", err)
+	}
+	calendarUpdate, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"update_calendar","calendar_name":"Work","description":"Delivery","color":null}`))
+	if err != nil {
+		t.Fatalf("decode calendar update: %v", err)
+	}
+	updatedCalendar, err := RunPlanningTask(ctx, options, calendarUpdate)
+	if err != nil {
+		t.Fatalf("update calendar: %v", err)
+	}
+	if updatedCalendar.Rejected || updatedCalendar.Calendars[0].Description == nil || *updatedCalendar.Calendars[0].Description != "Delivery" || updatedCalendar.Calendars[0].Color != nil {
+		t.Fatalf("updated calendar = %#v, want description set and color cleared", updatedCalendar)
+	}
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:      PlanningTaskActionCreateEvent,
+		CalendarID:  calendar.Calendars[0].ID,
+		Title:       "Standup",
+		StartAt:     "2026-04-16T09:00:00Z",
+		EndAt:       "2026-04-16T09:30:00Z",
+		Description: stringPtr("Daily sync"),
+		Recurrence:  &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	eventUpdateJSON := `{"action":"update_event","event_id":"` + event.Events[0].ID + `","description":null,"start_at":null,"end_at":null,"start_date":"2026-04-17","recurrence":null}`
+	eventUpdate, err := DecodePlanningTaskRequest(bytes.NewBufferString(eventUpdateJSON))
+	if err != nil {
+		t.Fatalf("decode event update: %v", err)
+	}
+	updatedEvent, err := RunPlanningTask(ctx, options, eventUpdate)
+	if err != nil {
+		t.Fatalf("update event: %v", err)
+	}
+	if updatedEvent.Rejected || updatedEvent.Events[0].Description != nil || updatedEvent.Events[0].StartAt != "" || updatedEvent.Events[0].StartDate != "2026-04-17" || updatedEvent.Events[0].Recurrence != nil {
+		t.Fatalf("updated event = %#v, want explicit clears and all-day date", updatedEvent)
+	}
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Review",
+		DueDate:      "2026-04-16",
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	taskUpdateJSON := `{"action":"update_task","task_id":"` + task.Tasks[0].ID + `","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}`
+	taskUpdate, err := DecodePlanningTaskRequest(bytes.NewBufferString(taskUpdateJSON))
+	if err != nil {
+		t.Fatalf("decode task update: %v", err)
+	}
+	updatedTask, err := RunPlanningTask(ctx, options, taskUpdate)
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+	if updatedTask.Rejected || updatedTask.Tasks[0].DueDate != "" || updatedTask.Tasks[0].DueAt != "2026-04-16T11:00:00Z" || updatedTask.Tasks[0].Recurrence != nil {
+		t.Fatalf("updated task = %#v, want due_date and recurrence cleared", updatedTask)
+	}
+}
+
+func TestRunPlanningTaskUpdateRejections(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "unknown field",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","unknown":true}`,
+		},
+		{
+			name:    "invalid event id",
+			request: `{"action":"update_event","event_id":"not-a-ulid","title":"Planning"}`,
+		},
+		{
+			name:    "clear event title",
+			request: `{"action":"update_event","event_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","title":null}`,
+		},
+		{
+			name:    "clear calendar name",
+			request: `{"action":"update_calendar","calendar_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","name":null}`,
+		},
+		{
+			name:    "no update fields",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := DecodePlanningTaskRequest(bytes.NewBufferString(test.request))
+			if test.name == "unknown field" {
+				if err == nil {
+					t.Fatal("DecodePlanningTaskRequest() error = nil, want unknown field error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
+			}
+			result, err := RunPlanningTask(context.Background(), testOptions(t), request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask(): %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+		})
+	}
+}
+
+func TestDecodePlanningTaskRequestRejectsUnknownRecurrenceFields(t *testing.T) {
+	t.Parallel()
+
+	_, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","recurrence":{"frequency":"daily","cnt":3}}`))
+	if err == nil {
+		t.Fatal("DecodePlanningTaskRequest() error = nil, want unknown recurrence field error")
+	}
+}
+
+func TestRunPlanningTaskUpdatePatchDateRejectionsBeforeDatabaseCreation(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "event start date",
+			request: `{"action":"update_event","event_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","start_date":"04/16"}`,
+		},
+		{
+			name:    "task due date",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","due_date":"04/16"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := DecodePlanningTaskRequest(bytes.NewBufferString(test.request))
+			if err != nil {
+				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
+			}
+			result, err := RunPlanningTask(context.Background(), sdk.Options{DatabasePath: databasePath}, request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask(): %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+				t.Fatalf("database directory exists after validation rejection: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunPlanningTaskValidationRejectionsBeforeDatabaseCreation(t *testing.T) {
 	t.Parallel()
 
@@ -384,5 +561,9 @@ func testOptions(t *testing.T) sdk.Options {
 }
 
 func intPtr(value int) *int {
+	return &value
+}
+
+func stringPtr(value string) *string {
 	return &value
 }

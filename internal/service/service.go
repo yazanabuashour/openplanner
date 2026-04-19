@@ -104,14 +104,26 @@ func (service *Service) UpdateCalendar(id string, patch domain.CalendarPatch) (d
 		return domain.Calendar{}, err
 	}
 
-	if patch.Name != nil {
-		calendar.Name = strings.TrimSpace(*patch.Name)
+	if patch.Name.Present {
+		if patch.Name.Clear {
+			calendar.Name = ""
+		} else {
+			calendar.Name = strings.TrimSpace(patch.Name.Value)
+		}
 	}
-	if patch.Description != nil {
-		calendar.Description = sanitizeOptionalString(patch.Description)
+	if patch.Description.Present {
+		if patch.Description.Clear {
+			calendar.Description = nil
+		} else {
+			calendar.Description = sanitizeOptionalString(&patch.Description.Value)
+		}
 	}
-	if patch.Color != nil {
-		calendar.Color = sanitizeOptionalString(patch.Color)
+	if patch.Color.Present {
+		if patch.Color.Clear {
+			calendar.Color = nil
+		} else {
+			calendar.Color = sanitizeOptionalString(&patch.Color.Value)
+		}
 	}
 
 	fieldErrors := []FieldError{}
@@ -238,37 +250,61 @@ func (service *Service) UpdateEvent(id string, patch domain.EventPatch) (domain.
 		return domain.Event{}, err
 	}
 
-	if patch.Title != nil {
-		event.Title = strings.TrimSpace(*patch.Title)
-	}
-	if patch.Description != nil {
-		event.Description = sanitizeOptionalString(patch.Description)
-	}
-	if patch.Location != nil {
-		event.Location = sanitizeOptionalString(patch.Location)
-	}
-	if patch.StartAt != nil || patch.EndAt != nil {
-		if patch.StartAt != nil {
-			event.StartAt = cloneTimePtr(patch.StartAt)
+	if patch.Title.Present {
+		if patch.Title.Clear {
+			event.Title = ""
+		} else {
+			event.Title = strings.TrimSpace(patch.Title.Value)
 		}
-		if patch.EndAt != nil {
-			event.EndAt = cloneTimePtr(patch.EndAt)
-		}
-		event.StartDate = nil
-		event.EndDate = nil
 	}
-	if patch.StartDate != nil || patch.EndDate != nil {
-		if patch.StartDate != nil {
-			event.StartDate = sanitizeOptionalString(patch.StartDate)
+	if patch.Description.Present {
+		if patch.Description.Clear {
+			event.Description = nil
+		} else {
+			event.Description = sanitizeOptionalString(&patch.Description.Value)
 		}
-		if patch.EndDate != nil {
-			event.EndDate = sanitizeOptionalString(patch.EndDate)
-		}
-		event.StartAt = nil
-		event.EndAt = nil
 	}
-	if patch.Recurrence != nil {
-		event.Recurrence = cloneRule(patch.Recurrence)
+	if patch.Location.Present {
+		if patch.Location.Clear {
+			event.Location = nil
+		} else {
+			event.Location = sanitizeOptionalString(&patch.Location.Value)
+		}
+	}
+	if patch.StartAt.Present {
+		if patch.StartAt.Clear {
+			event.StartAt = nil
+		} else {
+			event.StartAt = cloneTimePtr(&patch.StartAt.Value)
+		}
+	}
+	if patch.EndAt.Present {
+		if patch.EndAt.Clear {
+			event.EndAt = nil
+		} else {
+			event.EndAt = cloneTimePtr(&patch.EndAt.Value)
+		}
+	}
+	if patch.StartDate.Present {
+		if patch.StartDate.Clear {
+			event.StartDate = nil
+		} else {
+			event.StartDate = sanitizeOptionalString(&patch.StartDate.Value)
+		}
+	}
+	if patch.EndDate.Present {
+		if patch.EndDate.Clear {
+			event.EndDate = nil
+		} else {
+			event.EndDate = sanitizeOptionalString(&patch.EndDate.Value)
+		}
+	}
+	if patch.Recurrence.Present {
+		if patch.Recurrence.Clear {
+			event.Recurrence = nil
+		} else {
+			event.Recurrence = cloneRule(&patch.Recurrence.Value)
+		}
 	}
 	event.UpdatedAt = service.now()
 
@@ -376,22 +412,40 @@ func (service *Service) UpdateTask(id string, patch domain.TaskPatch) (domain.Ta
 		return domain.Task{}, err
 	}
 
-	if patch.Title != nil {
-		task.Title = strings.TrimSpace(*patch.Title)
+	if patch.Title.Present {
+		if patch.Title.Clear {
+			task.Title = ""
+		} else {
+			task.Title = strings.TrimSpace(patch.Title.Value)
+		}
 	}
-	if patch.Description != nil {
-		task.Description = sanitizeOptionalString(patch.Description)
+	if patch.Description.Present {
+		if patch.Description.Clear {
+			task.Description = nil
+		} else {
+			task.Description = sanitizeOptionalString(&patch.Description.Value)
+		}
 	}
-	if patch.DueAt != nil {
-		task.DueAt = cloneTimePtr(patch.DueAt)
-		task.DueDate = nil
+	if patch.DueAt.Present {
+		if patch.DueAt.Clear {
+			task.DueAt = nil
+		} else {
+			task.DueAt = cloneTimePtr(&patch.DueAt.Value)
+		}
 	}
-	if patch.DueDate != nil {
-		task.DueDate = sanitizeOptionalString(patch.DueDate)
-		task.DueAt = nil
+	if patch.DueDate.Present {
+		if patch.DueDate.Clear {
+			task.DueDate = nil
+		} else {
+			task.DueDate = sanitizeOptionalString(&patch.DueDate.Value)
+		}
 	}
-	if patch.Recurrence != nil {
-		task.Recurrence = cloneRule(patch.Recurrence)
+	if patch.Recurrence.Present {
+		if patch.Recurrence.Clear {
+			task.Recurrence = nil
+		} else {
+			task.Recurrence = cloneRule(&patch.Recurrence.Value)
+		}
 	}
 	task.UpdatedAt = service.now()
 
@@ -589,7 +643,7 @@ func validateEvent(event domain.Event) error {
 	if event.EndAt != nil && event.StartAt == nil {
 		fieldErrors = append(fieldErrors, FieldError{Field: "startAt", Message: "startAt is required when endAt is provided"})
 	}
-	if event.StartAt != nil && event.EndAt != nil && event.EndAt.Before(*event.StartAt) {
+	if event.StartAt != nil && event.EndAt != nil && !event.EndAt.After(*event.StartAt) {
 		fieldErrors = append(fieldErrors, FieldError{Field: "endAt", Message: "endAt must be after startAt"})
 	}
 	if event.EndDate != nil && event.StartDate == nil {

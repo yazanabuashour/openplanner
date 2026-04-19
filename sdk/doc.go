@@ -6,8 +6,9 @@
 // or require a separate server for the default SDK flow.
 //
 // For common local planning tasks, prefer the Client helper methods
-// EnsureCalendar, CreateEvent, CreateTask, ListAgenda, ListCalendars,
-// ListEvents, ListTasks, and CompleteTask.
+// EnsureCalendar, CreateEvent, CreateTask, UpdateCalendar, UpdateEvent,
+// UpdateTask, ListAgenda, ListCalendars, ListEvents, ListTasks, and
+// CompleteTask.
 //
 // Agent-driven workflows should use the installed openplanner JSON runner. The
 // SDK remains the Go developer surface.

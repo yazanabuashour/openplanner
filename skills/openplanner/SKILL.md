@@ -3,6 +3,7 @@ name: openplanner
 description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner; reject ambiguous dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly before tools.
 license: MIT
 compatibility: Requires local filesystem access and an installed openplanner binary on PATH.
+metadata: { openplanner.repo: "https://github.com/yazanabuashour/openplanner", openplanner.runner: "openplanner planning", openplanner.skillArchive: "openplanner_<version>_skill.tar.gz" }
 ---
 
 # OpenPlanner
@@ -25,6 +26,9 @@ Supported routine actions are:
 - `ensure_calendar`
 - `create_event`
 - `create_task`
+- `update_calendar`
+- `update_event`
+- `update_task`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -33,6 +37,14 @@ Supported routine actions are:
 
 For event and task creation, prefer `calendar_name`. The runner ensures that
 calendar internally so agents do not need to discover or shuttle calendar IDs.
+For updates, use the object ID returned by a prior list/create result, except
+`update_calendar`, which may identify the current calendar by exactly one of
+`calendar_id` or `calendar_name`.
+
+Update payloads use patch semantics. Omit a field to preserve it, send a
+non-null value to set it, and send `null` to clear clearable optional fields.
+Do not use empty strings as clear instructions. Required fields such as event
+and task titles can be changed but cannot be cleared.
 
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
@@ -82,6 +94,10 @@ Common one-line payloads:
 `{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}`;
 `{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}`;
 `{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}`;
+`{"action":"update_calendar","calendar_name":"Work","description":null,"color":"#2563EB"}`;
+`{"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}`;
+`{"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}`;
+`{"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}`;
 `{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}`;
 `{"action":"list_events","calendar_name":"Work","limit":1}`;
 `{"action":"list_tasks","calendar_name":"Personal","limit":1}`;

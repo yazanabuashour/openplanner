@@ -53,6 +53,38 @@ type CalendarInput struct {
 	Color       *string
 }
 
+type PatchField[T any] struct {
+	set   bool
+	clear bool
+	value T
+}
+
+func SetPatch[T any](value T) PatchField[T] {
+	return PatchField[T]{set: true, value: value}
+}
+
+func ClearPatch[T any]() PatchField[T] {
+	return PatchField[T]{set: true, clear: true}
+}
+
+func (field PatchField[T]) IsSet() bool {
+	return field.set
+}
+
+func (field PatchField[T]) IsClear() bool {
+	return field.set && field.clear
+}
+
+func (field PatchField[T]) Value() T {
+	return field.value
+}
+
+type CalendarPatchInput struct {
+	Name        PatchField[string]
+	Description PatchField[string]
+	Color       PatchField[string]
+}
+
 type EventInput struct {
 	CalendarID  string
 	Title       string
@@ -65,6 +97,17 @@ type EventInput struct {
 	Recurrence  *RecurrenceRule
 }
 
+type EventPatchInput struct {
+	Title       PatchField[string]
+	Description PatchField[string]
+	Location    PatchField[string]
+	StartAt     PatchField[time.Time]
+	EndAt       PatchField[time.Time]
+	StartDate   PatchField[string]
+	EndDate     PatchField[string]
+	Recurrence  PatchField[RecurrenceRule]
+}
+
 type TaskInput struct {
 	CalendarID  string
 	Title       string
@@ -72,6 +115,14 @@ type TaskInput struct {
 	DueAt       *time.Time
 	DueDate     *string
 	Recurrence  *RecurrenceRule
+}
+
+type TaskPatchInput struct {
+	Title       PatchField[string]
+	Description PatchField[string]
+	DueAt       PatchField[time.Time]
+	DueDate     PatchField[string]
+	Recurrence  PatchField[RecurrenceRule]
 }
 
 type TaskCompletionInput struct {

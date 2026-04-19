@@ -43,10 +43,8 @@ func runPlanning(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		return 2
 	}
 
-	var request runner.PlanningTaskRequest
-	decoder := json.NewDecoder(stdin)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	request, err := runner.DecodePlanningTaskRequest(stdin)
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "decode planning request: %v\n", err)
 		return 1
 	}

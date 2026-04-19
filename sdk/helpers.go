@@ -47,11 +47,11 @@ func (client *Client) EnsureCalendar(ctx context.Context, input CalendarInput) (
 	patch := domain.CalendarPatch{}
 	changed := false
 	if input.Description != nil && !stringPtrEqual(existing.Description, normalizeOptionalString(input.Description)) {
-		patch.Description = cloneString(input.Description)
+		patch.Description = domain.SetPatch(*input.Description)
 		changed = true
 	}
 	if input.Color != nil && !stringPtrEqual(existing.Color, normalizeOptionalString(input.Color)) {
-		patch.Color = cloneString(input.Color)
+		patch.Color = domain.SetPatch(*input.Color)
 		changed = true
 	}
 	if !changed {
@@ -69,6 +69,25 @@ func (client *Client) EnsureCalendar(ctx context.Context, input CalendarInput) (
 		Calendar: fromDomainCalendar(updated),
 		Status:   CalendarWriteStatusUpdated,
 	}, nil
+}
+
+func (client *Client) UpdateCalendar(ctx context.Context, id string, input CalendarPatchInput) (Calendar, error) {
+	if err := checkContext(ctx); err != nil {
+		return Calendar{}, err
+	}
+	service, err := client.localService()
+	if err != nil {
+		return Calendar{}, err
+	}
+	calendar, err := service.UpdateCalendar(id, domain.CalendarPatch{
+		Name:        toDomainStringPatch(input.Name),
+		Description: toDomainStringPatch(input.Description),
+		Color:       toDomainStringPatch(input.Color),
+	})
+	if err != nil {
+		return Calendar{}, err
+	}
+	return fromDomainCalendar(calendar), nil
 }
 
 func (client *Client) CreateEvent(ctx context.Context, input EventInput) (Event, error) {
@@ -89,6 +108,30 @@ func (client *Client) CreateEvent(ctx context.Context, input EventInput) (Event,
 		StartDate:   input.StartDate,
 		EndDate:     input.EndDate,
 		Recurrence:  toDomainRule(input.Recurrence),
+	})
+	if err != nil {
+		return Event{}, err
+	}
+	return fromDomainEvent(event), nil
+}
+
+func (client *Client) UpdateEvent(ctx context.Context, id string, input EventPatchInput) (Event, error) {
+	if err := checkContext(ctx); err != nil {
+		return Event{}, err
+	}
+	service, err := client.localService()
+	if err != nil {
+		return Event{}, err
+	}
+	event, err := service.UpdateEvent(id, domain.EventPatch{
+		Title:       toDomainStringPatch(input.Title),
+		Description: toDomainStringPatch(input.Description),
+		Location:    toDomainStringPatch(input.Location),
+		StartAt:     toDomainTimePatch(input.StartAt),
+		EndAt:       toDomainTimePatch(input.EndAt),
+		StartDate:   toDomainStringPatch(input.StartDate),
+		EndDate:     toDomainStringPatch(input.EndDate),
+		Recurrence:  toDomainRulePatch(input.Recurrence),
 	})
 	if err != nil {
 		return Event{}, err
@@ -154,6 +197,27 @@ func (client *Client) CreateTask(ctx context.Context, input TaskInput) (Task, er
 		DueAt:       input.DueAt,
 		DueDate:     input.DueDate,
 		Recurrence:  toDomainRule(input.Recurrence),
+	})
+	if err != nil {
+		return Task{}, err
+	}
+	return fromDomainTask(task), nil
+}
+
+func (client *Client) UpdateTask(ctx context.Context, id string, input TaskPatchInput) (Task, error) {
+	if err := checkContext(ctx); err != nil {
+		return Task{}, err
+	}
+	service, err := client.localService()
+	if err != nil {
+		return Task{}, err
+	}
+	task, err := service.UpdateTask(id, domain.TaskPatch{
+		Title:       toDomainStringPatch(input.Title),
+		Description: toDomainStringPatch(input.Description),
+		DueAt:       toDomainTimePatch(input.DueAt),
+		DueDate:     toDomainStringPatch(input.DueDate),
+		Recurrence:  toDomainRulePatch(input.Recurrence),
 	})
 	if err != nil {
 		return Task{}, err
@@ -291,6 +355,49 @@ func toDomainRule(rule *RecurrenceRule) *domain.RecurrenceRule {
 		return nil
 	}
 	return &domain.RecurrenceRule{
+		Frequency:  domain.RecurrenceFrequency(rule.Frequency),
+		Interval:   rule.Interval,
+		Count:      cloneInt32(rule.Count),
+		UntilAt:    cloneTime(rule.UntilAt),
+		UntilDate:  cloneString(rule.UntilDate),
+		ByWeekday:  toDomainWeekdays(rule.ByWeekday),
+		ByMonthDay: append([]int32(nil), rule.ByMonthDay...),
+	}
+}
+
+func toDomainStringPatch(field PatchField[string]) domain.PatchField[string] {
+	if !field.IsSet() {
+		return domain.PatchField[string]{}
+	}
+	if field.IsClear() {
+		return domain.ClearPatch[string]()
+	}
+	return domain.SetPatch(field.Value())
+}
+
+func toDomainTimePatch(field PatchField[time.Time]) domain.PatchField[time.Time] {
+	if !field.IsSet() {
+		return domain.PatchField[time.Time]{}
+	}
+	if field.IsClear() {
+		return domain.ClearPatch[time.Time]()
+	}
+	return domain.SetPatch(field.Value())
+}
+
+func toDomainRulePatch(field PatchField[RecurrenceRule]) domain.PatchField[domain.RecurrenceRule] {
+	if !field.IsSet() {
+		return domain.PatchField[domain.RecurrenceRule]{}
+	}
+	if field.IsClear() {
+		return domain.ClearPatch[domain.RecurrenceRule]()
+	}
+	rule := toDomainRuleValue(field.Value())
+	return domain.SetPatch(rule)
+}
+
+func toDomainRuleValue(rule RecurrenceRule) domain.RecurrenceRule {
+	return domain.RecurrenceRule{
 		Frequency:  domain.RecurrenceFrequency(rule.Frequency),
 		Interval:   rule.Interval,
 		Count:      cloneInt32(rule.Count),

@@ -9,7 +9,10 @@ Skills-compatible skill, and a direct local Go SDK backed by SQLite storage.
 Tell your agent:
 
 ```text
-Install https://github.com/yazanabuashour/openplanner
+Install OpenPlanner from https://github.com/yazanabuashour/openplanner.
+Complete both required steps before reporting success:
+1. Install and verify the openplanner runner binary.
+2. Register the OpenPlanner skill from skills/openplanner/SKILL.md using your native skill system.
 ```
 
 The agent should install the `openplanner` runner and place the
@@ -32,8 +35,17 @@ containing `SKILL.md`; agent-specific directories are intentionally not part of
 OpenPlanner's release contract.
 
 After `v0.1.0`, release archives will include platform builds of the
-`openplanner` runner and an `openplanner_<version>_skill.tar.gz` archive for
-manual skill installation.
+`openplanner` runner, `install.sh`, and an `openplanner_<version>_skill.tar.gz`
+archive for manual skill installation. The release installer installs and
+verifies only the runner; skill registration remains delegated to the target
+agent's native skill system.
+
+```bash
+curl -fsSL https://github.com/yazanabuashour/openplanner/releases/latest/download/install.sh | sh
+```
+
+Optional per-agent examples are in [docs/agent-install.md](docs/agent-install.md).
+Those examples are not the OpenPlanner install contract.
 
 ## Runner Interface
 
@@ -56,11 +68,19 @@ Supported routine actions are:
 - `ensure_calendar`
 - `create_event`
 - `create_task`
+- `update_calendar`
+- `update_event`
+- `update_task`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
 - `complete_task`
 - `validate`
+
+Update actions use patch semantics: omitted fields are preserved, non-null
+fields are set, and `null` clears clearable optional fields. Use `event_id` for
+`update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
+`calendar_name` for `update_calendar`.
 
 ## Local Go SDK
 
@@ -98,11 +118,18 @@ func main() {
 
 	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	endAt := startAt.Add(time.Hour)
-	if _, err := client.CreateEvent(ctx, sdk.EventInput{
+	event, err := client.CreateEvent(ctx, sdk.EventInput{
 		CalendarID: calendar.Calendar.ID,
 		Title:      "Standup",
 		StartAt:    &startAt,
 		EndAt:      &endAt,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	if _, err := client.UpdateEvent(ctx, event.ID, sdk.EventPatchInput{
+		Description: sdk.ClearPatch[string](),
 	}); err != nil {
 		panic(err)
 	}

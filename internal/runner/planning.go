@@ -1,9 +1,12 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +21,9 @@ const (
 	PlanningTaskActionEnsureCalendar = "ensure_calendar"
 	PlanningTaskActionCreateEvent    = "create_event"
 	PlanningTaskActionCreateTask     = "create_task"
+	PlanningTaskActionUpdateCalendar = "update_calendar"
+	PlanningTaskActionUpdateEvent    = "update_event"
+	PlanningTaskActionUpdateTask     = "update_task"
 	PlanningTaskActionListAgenda     = "list_agenda"
 	PlanningTaskActionListEvents     = "list_events"
 	PlanningTaskActionListTasks      = "list_tasks"
@@ -31,6 +37,7 @@ type PlanningTaskRequest struct {
 	Action         string                 `json:"action"`
 	CalendarName   string                 `json:"calendar_name,omitempty"`
 	CalendarID     string                 `json:"calendar_id,omitempty"`
+	EventID        string                 `json:"event_id,omitempty"`
 	Name           string                 `json:"name,omitempty"`
 	Description    *string                `json:"description,omitempty"`
 	Color          *string                `json:"color,omitempty"`
@@ -50,6 +57,10 @@ type PlanningTaskRequest struct {
 	To             string                 `json:"to,omitempty"`
 	Cursor         string                 `json:"cursor,omitempty"`
 	Limit          *int                   `json:"limit,omitempty"`
+
+	CalendarPatch sdk.CalendarPatchInput `json:"-"`
+	EventPatch    sdk.EventPatchInput    `json:"-"`
+	TaskPatch     sdk.TaskPatchInput     `json:"-"`
 }
 
 type RecurrenceRuleRequest struct {
@@ -142,14 +153,164 @@ type RecurrenceRuleResult struct {
 type normalizedPlanningTaskRequest struct {
 	Action        string
 	CalendarInput sdk.CalendarInput
+	CalendarPatch sdk.CalendarPatchInput
 	CalendarName  string
 	CalendarID    string
+	EventID       string
 	EventInput    sdk.EventInput
+	EventPatch    sdk.EventPatchInput
 	TaskInput     sdk.TaskInput
+	TaskPatch     sdk.TaskPatchInput
 	ListOptions   sdk.ListOptions
 	AgendaOptions sdk.AgendaOptions
 	TaskID        string
 	Completion    sdk.TaskCompletionInput
+}
+
+func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+
+	var raw map[string]json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return PlanningTaskRequest{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return PlanningTaskRequest{}, errors.New("planning request must be a single JSON object")
+	}
+
+	for key := range raw {
+		if !knownPlanningTaskFields[key] {
+			return PlanningTaskRequest{}, fmt.Errorf("json: unknown field %q", key)
+		}
+	}
+
+	var request PlanningTaskRequest
+	content, err := json.Marshal(raw)
+	if err != nil {
+		return PlanningTaskRequest{}, err
+	}
+	if err := decodeStrictJSON(content, &request); err != nil {
+		return PlanningTaskRequest{}, err
+	}
+	populatePatchFields(raw, &request)
+	return request, nil
+}
+
+func decodeStrictJSON(content []byte, dest any) error {
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dest); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("planning request must be a single JSON object")
+	}
+	return nil
+}
+
+var knownPlanningTaskFields = map[string]bool{
+	"action":          true,
+	"calendar_name":   true,
+	"calendar_id":     true,
+	"event_id":        true,
+	"name":            true,
+	"description":     true,
+	"color":           true,
+	"title":           true,
+	"location":        true,
+	"start_at":        true,
+	"end_at":          true,
+	"start_date":      true,
+	"end_date":        true,
+	"due_at":          true,
+	"due_date":        true,
+	"recurrence":      true,
+	"task_id":         true,
+	"occurrence_at":   true,
+	"occurrence_date": true,
+	"from":            true,
+	"to":              true,
+	"cursor":          true,
+	"limit":           true,
+}
+
+func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRequest) {
+	request.CalendarPatch.Name = jsonStringPatch(raw, "name")
+	request.CalendarPatch.Description = jsonStringPatch(raw, "description")
+	request.CalendarPatch.Color = jsonStringPatch(raw, "color")
+
+	request.EventPatch.Title = jsonStringPatch(raw, "title")
+	request.EventPatch.Description = jsonStringPatch(raw, "description")
+	request.EventPatch.Location = jsonStringPatch(raw, "location")
+	request.EventPatch.StartAt = jsonTimePatch(raw, "start_at")
+	request.EventPatch.EndAt = jsonTimePatch(raw, "end_at")
+	request.EventPatch.StartDate = jsonStringPatch(raw, "start_date")
+	request.EventPatch.EndDate = jsonStringPatch(raw, "end_date")
+	request.EventPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
+
+	request.TaskPatch.Title = jsonStringPatch(raw, "title")
+	request.TaskPatch.Description = jsonStringPatch(raw, "description")
+	request.TaskPatch.DueAt = jsonTimePatch(raw, "due_at")
+	request.TaskPatch.DueDate = jsonStringPatch(raw, "due_date")
+	request.TaskPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
+}
+
+func jsonStringPatch(raw map[string]json.RawMessage, key string) sdk.PatchField[string] {
+	value, ok := raw[key]
+	if !ok {
+		return sdk.PatchField[string]{}
+	}
+	if isJSONNull(value) {
+		return sdk.ClearPatch[string]()
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return sdk.PatchField[string]{}
+	}
+	return sdk.SetPatch(decoded)
+}
+
+func jsonTimePatch(raw map[string]json.RawMessage, key string) sdk.PatchField[time.Time] {
+	value, ok := raw[key]
+	if !ok {
+		return sdk.PatchField[time.Time]{}
+	}
+	if isJSONNull(value) {
+		return sdk.ClearPatch[time.Time]()
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return sdk.PatchField[time.Time]{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(decoded))
+	if err != nil {
+		return sdk.PatchField[time.Time]{}
+	}
+	return sdk.SetPatch(parsed)
+}
+
+func jsonRecurrencePatch(raw map[string]json.RawMessage, key string) sdk.PatchField[sdk.RecurrenceRule] {
+	value, ok := raw[key]
+	if !ok {
+		return sdk.PatchField[sdk.RecurrenceRule]{}
+	}
+	if isJSONNull(value) {
+		return sdk.ClearPatch[sdk.RecurrenceRule]()
+	}
+	var request RecurrenceRuleRequest
+	if err := json.Unmarshal(value, &request); err != nil {
+		return sdk.PatchField[sdk.RecurrenceRule]{}
+	}
+	rule, rejection := normalizeRecurrence(&request, false)
+	if rejection != "" || rule == nil {
+		return sdk.PatchField[sdk.RecurrenceRule]{}
+	}
+	return sdk.SetPatch(*rule)
+}
+
+func isJSONNull(value json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 }
 
 func RunPlanningTask(ctx context.Context, options sdk.Options, request PlanningTaskRequest) (PlanningTaskResult, error) {
@@ -187,6 +348,12 @@ func runPlanningTask(ctx context.Context, api *sdk.Client, request normalizedPla
 		return runCreateEvent(ctx, api, request)
 	case PlanningTaskActionCreateTask:
 		return runCreateTask(ctx, api, request)
+	case PlanningTaskActionUpdateCalendar:
+		return runUpdateCalendar(ctx, api, request)
+	case PlanningTaskActionUpdateEvent:
+		return runUpdateEvent(ctx, api, request)
+	case PlanningTaskActionUpdateTask:
+		return runUpdateTask(ctx, api, request)
 	case PlanningTaskActionListAgenda:
 		return runListAgenda(ctx, api, request)
 	case PlanningTaskActionListEvents:
@@ -274,6 +441,68 @@ func runCreateTask(ctx context.Context, api *sdk.Client, request normalizedPlann
 		result.Writes = append([]PlanningWrite{*calendarWrite}, result.Writes...)
 	}
 	return result, nil
+}
+
+func runUpdateCalendar(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	calendarID := request.CalendarID
+	if calendarID == "" {
+		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
+		if err != nil {
+			return PlanningTaskResult{}, err
+		}
+		if !found {
+			return rejectedResult(fmt.Sprintf("calendar %q was not found", request.CalendarName)), nil
+		}
+		calendarID = calendar.ID
+	}
+	updated, err := api.UpdateCalendar(ctx, calendarID, request.CalendarPatch)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "calendar",
+			ID:     updated.ID,
+			Status: "updated",
+			Name:   updated.Name,
+		}},
+		Calendars: []CalendarEntry{calendarEntry(updated)},
+		Summary:   "updated calendar",
+	}, nil
+}
+
+func runUpdateEvent(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	updated, err := api.UpdateEvent(ctx, request.EventID, request.EventPatch)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "event",
+			ID:     updated.ID,
+			Status: "updated",
+			Title:  updated.Title,
+		}},
+		Events:  []EventEntry{eventEntry(updated)},
+		Summary: "updated event",
+	}, nil
+}
+
+func runUpdateTask(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	updated, err := api.UpdateTask(ctx, request.TaskID, request.TaskPatch)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "task",
+			ID:     updated.ID,
+			Status: "updated",
+			Title:  updated.Title,
+		}},
+		Tasks:   []TaskEntry{taskEntry(updated)},
+		Summary: "updated task",
+	}, nil
 }
 
 func runListAgenda(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
@@ -430,6 +659,45 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		}
 		normalized.TaskInput = input
 		return normalized, ""
+	case PlanningTaskActionUpdateCalendar:
+		identifier, patch, rejection := normalizeCalendarPatchInput(request)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.CalendarName = identifier.CalendarName
+		normalized.CalendarID = identifier.CalendarID
+		normalized.CalendarPatch = patch
+		return normalized, ""
+	case PlanningTaskActionUpdateEvent:
+		eventID := strings.TrimSpace(request.EventID)
+		if eventID == "" {
+			return normalizedPlanningTaskRequest{}, "event_id is required"
+		}
+		if _, err := ulid.ParseStrict(eventID); err != nil {
+			return normalizedPlanningTaskRequest{}, "event_id must be a valid ULID"
+		}
+		patch, rejection := normalizeEventPatchInput(request)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.EventID = eventID
+		normalized.EventPatch = patch
+		return normalized, ""
+	case PlanningTaskActionUpdateTask:
+		taskID := strings.TrimSpace(request.TaskID)
+		if taskID == "" {
+			return normalizedPlanningTaskRequest{}, "task_id is required"
+		}
+		if _, err := ulid.ParseStrict(taskID); err != nil {
+			return normalizedPlanningTaskRequest{}, "task_id must be a valid ULID"
+		}
+		patch, rejection := normalizeTaskPatchInput(request)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.TaskID = taskID
+		normalized.TaskPatch = patch
+		return normalized, ""
 	case PlanningTaskActionListAgenda:
 		from, rejection := parseRequiredTime("from", request.From)
 		if rejection != "" {
@@ -492,6 +760,51 @@ func normalizeCalendarInput(request PlanningTaskRequest) (sdk.CalendarInput, str
 	}, ""
 }
 
+type calendarIdentifier struct {
+	CalendarName string
+	CalendarID   string
+}
+
+func normalizeCalendarPatchInput(request PlanningTaskRequest) (calendarIdentifier, sdk.CalendarPatchInput, string) {
+	name := strings.TrimSpace(request.CalendarName)
+	id := strings.TrimSpace(request.CalendarID)
+	if name == "" && id == "" {
+		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "calendar_name or calendar_id is required"
+	}
+	if name != "" && id != "" {
+		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "use calendar_name or calendar_id, not both"
+	}
+	if id != "" {
+		if _, err := ulid.ParseStrict(id); err != nil {
+			return calendarIdentifier{}, sdk.CalendarPatchInput{}, "calendar_id must be a valid ULID"
+		}
+	}
+
+	patch := request.CalendarPatch
+	if !patch.Name.IsSet() && strings.TrimSpace(request.Name) != "" {
+		patch.Name = sdk.SetPatch(request.Name)
+	}
+	if !patch.Description.IsSet() && request.Description != nil {
+		patch.Description = sdk.SetPatch(*request.Description)
+	}
+	if !patch.Color.IsSet() && request.Color != nil {
+		patch.Color = sdk.SetPatch(*request.Color)
+	}
+	if patch.Name.IsClear() {
+		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "name cannot be cleared"
+	}
+	if patch.Color.IsSet() && !patch.Color.IsClear() {
+		color := strings.TrimSpace(patch.Color.Value())
+		if color != "" && !colorPattern.MatchString(color) {
+			return calendarIdentifier{}, sdk.CalendarPatchInput{}, "color must be a #RRGGBB hex string"
+		}
+	}
+	if !calendarPatchHasUpdate(patch) {
+		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "at least one update field is required"
+	}
+	return calendarIdentifier{CalendarName: name, CalendarID: id}, patch, ""
+}
+
 func normalizeCalendarRef(request PlanningTaskRequest, normalized *normalizedPlanningTaskRequest) string {
 	name := calendarName(request)
 	id := strings.TrimSpace(request.CalendarID)
@@ -511,6 +824,118 @@ func normalizeCalendarRef(request PlanningTaskRequest, normalized *normalizedPla
 	}
 	normalized.CalendarName = name
 	return ""
+}
+
+func normalizeEventPatchInput(request PlanningTaskRequest) (sdk.EventPatchInput, string) {
+	patch := request.EventPatch
+	if !patch.Title.IsSet() && strings.TrimSpace(request.Title) != "" {
+		patch.Title = sdk.SetPatch(request.Title)
+	}
+	if !patch.Description.IsSet() && request.Description != nil {
+		patch.Description = sdk.SetPatch(*request.Description)
+	}
+	if !patch.Location.IsSet() && request.Location != nil {
+		patch.Location = sdk.SetPatch(*request.Location)
+	}
+	if !patch.StartAt.IsSet() && strings.TrimSpace(request.StartAt) != "" {
+		startAt, rejection := parseRequiredTime("start_at", request.StartAt)
+		if rejection != "" {
+			return sdk.EventPatchInput{}, rejection
+		}
+		patch.StartAt = sdk.SetPatch(startAt)
+	}
+	if !patch.EndAt.IsSet() && strings.TrimSpace(request.EndAt) != "" {
+		endAt, rejection := parseRequiredTime("end_at", request.EndAt)
+		if rejection != "" {
+			return sdk.EventPatchInput{}, rejection
+		}
+		patch.EndAt = sdk.SetPatch(endAt)
+	}
+	if !patch.StartDate.IsSet() && strings.TrimSpace(request.StartDate) != "" {
+		startDate, rejection := parseRequiredDate("start_date", request.StartDate)
+		if rejection != "" {
+			return sdk.EventPatchInput{}, rejection
+		}
+		patch.StartDate = sdk.SetPatch(startDate)
+	}
+	if !patch.EndDate.IsSet() && strings.TrimSpace(request.EndDate) != "" {
+		endDate, rejection := parseRequiredDate("end_date", request.EndDate)
+		if rejection != "" {
+			return sdk.EventPatchInput{}, rejection
+		}
+		patch.EndDate = sdk.SetPatch(endDate)
+	}
+	startDate, rejection := normalizeDatePatch("start_date", patch.StartDate)
+	if rejection != "" {
+		return sdk.EventPatchInput{}, rejection
+	}
+	patch.StartDate = startDate
+	endDate, rejection := normalizeDatePatch("end_date", patch.EndDate)
+	if rejection != "" {
+		return sdk.EventPatchInput{}, rejection
+	}
+	patch.EndDate = endDate
+	if !patch.Recurrence.IsSet() && request.Recurrence != nil {
+		recurrence, rejection := normalizeRecurrence(request.Recurrence, false)
+		if rejection != "" {
+			return sdk.EventPatchInput{}, rejection
+		}
+		if recurrence != nil {
+			patch.Recurrence = sdk.SetPatch(*recurrence)
+		}
+	}
+	if patch.Title.IsClear() {
+		return sdk.EventPatchInput{}, "title cannot be cleared"
+	}
+	if !eventPatchHasUpdate(patch) {
+		return sdk.EventPatchInput{}, "at least one update field is required"
+	}
+	return patch, ""
+}
+
+func normalizeTaskPatchInput(request PlanningTaskRequest) (sdk.TaskPatchInput, string) {
+	patch := request.TaskPatch
+	if !patch.Title.IsSet() && strings.TrimSpace(request.Title) != "" {
+		patch.Title = sdk.SetPatch(request.Title)
+	}
+	if !patch.Description.IsSet() && request.Description != nil {
+		patch.Description = sdk.SetPatch(*request.Description)
+	}
+	if !patch.DueAt.IsSet() && strings.TrimSpace(request.DueAt) != "" {
+		dueAt, rejection := parseRequiredTime("due_at", request.DueAt)
+		if rejection != "" {
+			return sdk.TaskPatchInput{}, rejection
+		}
+		patch.DueAt = sdk.SetPatch(dueAt)
+	}
+	if !patch.DueDate.IsSet() && strings.TrimSpace(request.DueDate) != "" {
+		dueDate, rejection := parseRequiredDate("due_date", request.DueDate)
+		if rejection != "" {
+			return sdk.TaskPatchInput{}, rejection
+		}
+		patch.DueDate = sdk.SetPatch(dueDate)
+	}
+	dueDate, rejection := normalizeDatePatch("due_date", patch.DueDate)
+	if rejection != "" {
+		return sdk.TaskPatchInput{}, rejection
+	}
+	patch.DueDate = dueDate
+	if !patch.Recurrence.IsSet() && request.Recurrence != nil {
+		recurrence, rejection := normalizeRecurrence(request.Recurrence, false)
+		if rejection != "" {
+			return sdk.TaskPatchInput{}, rejection
+		}
+		if recurrence != nil {
+			patch.Recurrence = sdk.SetPatch(*recurrence)
+		}
+	}
+	if patch.Title.IsClear() {
+		return sdk.TaskPatchInput{}, "title cannot be cleared"
+	}
+	if !taskPatchHasUpdate(patch) {
+		return sdk.TaskPatchInput{}, "at least one update field is required"
+	}
+	return patch, ""
 }
 
 func normalizeOptionalCalendarFilter(request PlanningTaskRequest, normalized *normalizedPlanningTaskRequest) string {
@@ -749,6 +1174,28 @@ func parseOptionalDate(field string, value string) (*string, string) {
 	return &value, ""
 }
 
+func parseRequiredDate(field string, value string) (string, string) {
+	parsed, rejection := parseOptionalDate(field, value)
+	if rejection != "" {
+		return "", rejection
+	}
+	if parsed == nil {
+		return "", field + " is required"
+	}
+	return *parsed, ""
+}
+
+func normalizeDatePatch(field string, patch sdk.PatchField[string]) (sdk.PatchField[string], string) {
+	if !patch.IsSet() || patch.IsClear() {
+		return patch, ""
+	}
+	value, rejection := parseRequiredDate(field, patch.Value())
+	if rejection != "" {
+		return sdk.PatchField[string]{}, rejection
+	}
+	return sdk.SetPatch(value), ""
+}
+
 func parseOptionalTime(field string, value string) (*time.Time, string) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -759,6 +1206,29 @@ func parseOptionalTime(field string, value string) (*time.Time, string) {
 		return nil, field + " must be RFC3339"
 	}
 	return &parsed, ""
+}
+
+func calendarPatchHasUpdate(patch sdk.CalendarPatchInput) bool {
+	return patch.Name.IsSet() || patch.Description.IsSet() || patch.Color.IsSet()
+}
+
+func eventPatchHasUpdate(patch sdk.EventPatchInput) bool {
+	return patch.Title.IsSet() ||
+		patch.Description.IsSet() ||
+		patch.Location.IsSet() ||
+		patch.StartAt.IsSet() ||
+		patch.EndAt.IsSet() ||
+		patch.StartDate.IsSet() ||
+		patch.EndDate.IsSet() ||
+		patch.Recurrence.IsSet()
+}
+
+func taskPatchHasUpdate(patch sdk.TaskPatchInput) bool {
+	return patch.Title.IsSet() ||
+		patch.Description.IsSet() ||
+		patch.DueAt.IsSet() ||
+		patch.DueDate.IsSet() ||
+		patch.Recurrence.IsSet()
 }
 
 func parseRequiredTime(field string, value string) (time.Time, string) {

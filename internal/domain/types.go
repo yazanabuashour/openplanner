@@ -41,10 +41,24 @@ type Calendar struct {
 	UpdatedAt   time.Time
 }
 
+type PatchField[T any] struct {
+	Present bool
+	Clear   bool
+	Value   T
+}
+
+func SetPatch[T any](value T) PatchField[T] {
+	return PatchField[T]{Present: true, Value: value}
+}
+
+func ClearPatch[T any]() PatchField[T] {
+	return PatchField[T]{Present: true, Clear: true}
+}
+
 type CalendarPatch struct {
-	Name        *string
-	Description *string
-	Color       *string
+	Name        PatchField[string]
+	Description PatchField[string]
+	Color       PatchField[string]
 }
 
 type Event struct {
@@ -63,14 +77,14 @@ type Event struct {
 }
 
 type EventPatch struct {
-	Title       *string
-	Description *string
-	Location    *string
-	StartAt     *time.Time
-	EndAt       *time.Time
-	StartDate   *string
-	EndDate     *string
-	Recurrence  *RecurrenceRule
+	Title       PatchField[string]
+	Description PatchField[string]
+	Location    PatchField[string]
+	StartAt     PatchField[time.Time]
+	EndAt       PatchField[time.Time]
+	StartDate   PatchField[string]
+	EndDate     PatchField[string]
+	Recurrence  PatchField[RecurrenceRule]
 }
 
 type Task struct {
@@ -87,11 +101,11 @@ type Task struct {
 }
 
 type TaskPatch struct {
-	Title       *string
-	Description *string
-	DueAt       *time.Time
-	DueDate     *string
-	Recurrence  *RecurrenceRule
+	Title       PatchField[string]
+	Description PatchField[string]
+	DueAt       PatchField[time.Time]
+	DueDate     PatchField[string]
+	Recurrence  PatchField[RecurrenceRule]
 }
 
 type TaskCompletionRequest struct {

@@ -84,6 +84,7 @@ jobs:
           echo "skill_name=openplanner_${asset_version}_skill.tar.gz" >> "${GITHUB_OUTPUT}"
           echo "sbom_name=openplanner_${asset_version}_sbom.spdx.json" >> "${GITHUB_OUTPUT}"
           echo "checksums_name=openplanner_${asset_version}_checksums.txt" >> "${GITHUB_OUTPUT}"
+          echo "installer_name=install.sh" >> "${GITHUB_OUTPUT}"
 
       - name: Build runner and skill archives
         env:
@@ -108,6 +109,14 @@ jobs:
           done
 
           tar -czf "release-assets/${SKILL_NAME}" -C skills/openplanner SKILL.md
+
+      - name: Build installer
+        env:
+          INSTALLER_NAME: ${{ steps.meta.outputs.installer_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          sed "s/__OPENPLANNER_VERSION__/${VERSION}/g" scripts/install.sh > "release-assets/${INSTALLER_NAME}"
+          chmod 755 "release-assets/${INSTALLER_NAME}"
 
       - name: Build deterministic source archive
         env:
@@ -134,9 +143,10 @@ jobs:
           ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
           SBOM_NAME: ${{ steps.meta.outputs.sbom_name }}
           CHECKSUMS_NAME: ${{ steps.meta.outputs.checksums_name }}
+          INSTALLER_NAME: ${{ steps.meta.outputs.installer_name }}
         run: |
           cd release-assets
-          sha256sum *.tar.gz "${SBOM_NAME}" > "${CHECKSUMS_NAME}"
+          sha256sum *.tar.gz "${SBOM_NAME}" "${INSTALLER_NAME}" > "${CHECKSUMS_NAME}"
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

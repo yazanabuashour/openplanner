@@ -91,6 +91,44 @@ func TestPlanningRunnerValidationRejectionIsJSON(t *testing.T) {
 	}
 }
 
+func TestPlanningRunnerDecodesNullPatchFields(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "runner.db")
+	var createOut bytes.Buffer
+	var createErr bytes.Buffer
+	createCode := run([]string{"planning", "--db", databasePath},
+		bytes.NewBufferString(`{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":2}}`),
+		&createOut, &createErr)
+	if createCode != 0 {
+		t.Fatalf("create exit = %d, stderr = %s", createCode, createErr.String())
+	}
+
+	var createResult runner.PlanningTaskResult
+	if err := json.Unmarshal(createOut.Bytes(), &createResult); err != nil {
+		t.Fatalf("decode create result: %v", err)
+	}
+	if len(createResult.Tasks) != 1 {
+		t.Fatalf("create result = %#v", createResult)
+	}
+
+	input := `{"action":"update_task","task_id":"` + createResult.Tasks[0].ID + `","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}`
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"planning", "--db", databasePath}, bytes.NewBufferString(input), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("update exit = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	var result runner.PlanningTaskResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode update result: %v", err)
+	}
+	if result.Rejected || result.Tasks[0].DueDate != "" || result.Tasks[0].DueAt != "2026-04-16T11:00:00Z" || result.Tasks[0].Recurrence != nil {
+		t.Fatalf("result = %#v, want due_date and recurrence cleared", result)
+	}
+}
+
 func TestPlanningRunnerBadJSONExitsNonZero(t *testing.T) {
 	t.Parallel()
 
