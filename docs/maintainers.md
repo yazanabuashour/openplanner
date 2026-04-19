@@ -3,7 +3,11 @@
 This repository uses **Beads** (`bd`) in embedded mode for maintainer task tracking.
 The embedded Dolt database is authoritative; `.beads/issues.jsonl` is only a local JSONL export/backup and must stay untracked.
 
-This repository is public and its release surface is an embeddable Go module plus source-release metadata. There is still no hosted service, no auth-backed product surface, no background daemon, and no package registry beyond the Go module/tag flow. Keep maintainer docs honest about that status.
+This repository is public and its release surface is an embeddable Go module, an
+installed JSON runner, an Agent Skills-compatible skill, and release integrity
+metadata. There is still no hosted service, no auth-backed product surface, no
+background daemon, and no package registry beyond the Go module/tag flow. Keep
+maintainer docs honest about that status.
 
 ## Initial Setup
 
@@ -66,8 +70,11 @@ Current readiness assumptions:
 - `main` is the protected default branch.
 - Pull requests run only untrusted-safe validation with read-only token scope.
 - GitHub Releases are created from version tags in the `v0.y.z` form.
-- The distributable surface is the Go module resolved from those tags plus source-only release assets.
-- Release packaging stays source-only: deterministic source archive, `SHA256SUMS`, SPDX SBOM, and GitHub attestations.
+- The distributable surface is the Go module resolved from those tags, platform
+  archives for the `openplanner` runner, the portable skill archive, and release
+  integrity assets.
+- Release packaging publishes binary archives, a skill archive, deterministic
+  source archive, `SHA256SUMS`, SPDX SBOM, and GitHub attestations.
 - The runtime remains in process. Do not add deploy workflows, ports, or daemons unless the product surface changes intentionally.
 - Security reports are expected through GitHub private vulnerability reporting.
 
@@ -89,14 +96,17 @@ When changing GitHub settings, keep the repo aligned with:
 The release workflow has two paths:
 
 - `workflow_dispatch` packages and attests a snapshot from a chosen ref, then uploads workflow artifacts for manual inspection.
-- Pushing a `v0.y.z` tag runs the same verification and packaging steps, then publishes a GitHub Release and uploads the source archive, `SHA256SUMS`, and SBOM.
+- Pushing a `v0.y.z` tag runs the same verification and packaging steps, then
+  publishes a GitHub Release and uploads runner archives, the skill archive, the
+  source archive, `SHA256SUMS`, and SBOM.
 
 The first public tag should be `v0.1.0`. Users consume the SDK with `go get github.com/yazanabuashour/openplanner/sdk@v0.1.0` for that release, then continue using the same package path for later `v0.y.z` tags.
 
 Before tagging:
 
 1. Run the release workflow in `workflow_dispatch` mode against the intended ref.
-2. Inspect the uploaded source archive, `SHA256SUMS`, and SBOM.
+2. Inspect the uploaded runner archives, skill archive, source archive,
+   `SHA256SUMS`, and SBOM.
 3. Confirm the release assets match [docs/release-verification.md](../docs/release-verification.md).
 4. Tag the release only after manual review is complete.
 

@@ -1,5 +1,0 @@
-extends:
-  - spectral:oas
-rules:
-  info-contact: off
-  operation-description: off

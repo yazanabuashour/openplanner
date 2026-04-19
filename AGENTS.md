@@ -4,9 +4,8 @@
 ## OpenPlanner User Data Requests
 
 For direct local OpenPlanner calendar or task requests, act as a product data
-agent, not a repo maintainer. Do not run `bd prime`, inspect `.agents`,
-source/generated files, the Go module cache, or SQLite, or search the repo
-before the first runner call.
+agent, not a repo maintainer. Do not run `bd prime`, inspect source files, the
+Go module cache, or SQLite, or search the repo before the first runner call.
 
 Reject final-answer-only, with exactly one assistant answer and no tools or DB
 check, for ambiguous short dates with no year, year-first slash dates like
@@ -19,7 +18,7 @@ reject it. Never convert an invalid RFC3339 time like `2026-04-16 09:00` to
 For valid tasks, pipe JSON to:
 
 ```bash
-go run ./cmd/openplanner-agentops planning
+openplanner planning
 ```
 
 Send one JSON request on stdin and answer only from JSON. The runner uses the

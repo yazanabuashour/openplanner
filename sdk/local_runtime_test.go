@@ -1,13 +1,12 @@
 package sdk
 
 import (
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestOpenLocalUsesInProcessTransport(t *testing.T) {
+func TestOpenLocalUsesDirectLocalRuntime(t *testing.T) {
 	client, err := OpenLocal(Options{DatabasePath: filepath.Join(t.TempDir(), "openplanner.db")})
 	if err != nil {
 		t.Fatalf("OpenLocal(): %v", err)
@@ -18,23 +17,8 @@ func TestOpenLocalUsesInProcessTransport(t *testing.T) {
 		}
 	}()
 
-	cfg := client.GetConfig()
-	if cfg == nil {
-		t.Fatal("config = nil")
-	}
-	if len(cfg.Servers) != 1 || cfg.Servers[0].URL != localBaseURL {
-		t.Fatalf("server url = %#v, want %q", cfg.Servers, localBaseURL)
-	}
-
-	transport, ok := cfg.HTTPClient.Transport.(*localRoundTripper)
-	if !ok {
-		t.Fatalf("transport = %T, want *localRoundTripper", cfg.HTTPClient.Transport)
-	}
-	if transport.handler == nil {
-		t.Fatal("local round tripper handler = nil")
-	}
-	if cfg.HTTPClient.Transport == http.DefaultTransport {
-		t.Fatal("transport unexpectedly uses http.DefaultTransport")
+	if client.service == nil {
+		t.Fatal("service = nil")
 	}
 }
 

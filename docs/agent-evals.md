@@ -6,12 +6,11 @@ instruction is needed, put it in the production skill first.
 
 ## Active Surface
 
-- `production`: the installed `skills/openplanner` AgentOps JSON runner skill.
+- `production`: the installed `skills/openplanner/SKILL.md` skill plus an
+  installed `openplanner` runner on `PATH`.
 
-The SDK and generated client remain supported Go developer/runtime APIs, but
-they are not production agent-facing eval variants. Comparison variants, if
-added later, must live under eval assets or archives and must not be mixed into
-the production skill.
+The SDK remains a supported Go developer/runtime API, but it is not the
+production agent-facing eval variant.
 
 ## Scenario Coverage
 
@@ -34,26 +33,16 @@ Every scenario uses a fresh isolated repo copy, a fresh local database path, and
 reduced JSON/Markdown artifacts. Raw logs are not committed; reduced reports
 refer to them with `<run-root>` placeholders. The copied repo omits root
 `AGENTS.md`, stale `.agents` content, eval docs, reports, and harness code
-before installing eval-specific production instructions so repo-level maintainer
-instructions do not contaminate user-data tasks.
+before installing the production skill and a private `openplanner` runner binary.
 
 Single-turn scenarios use `codex exec --ephemeral`. Multi-turn scenarios use one
 persisted eval session per scenario: the first turn creates a session in the
 throwaway run directory context, and later turns use `codex exec resume` with
 explicit writable roots for the scenario run directory and shared Go cache.
-Per-turn raw logs live under `<run-root>/production/<scenario>/turn-N/`.
 
 The harness runs independent scenario jobs with `--parallel 4` by default. Use
 `--parallel 1` when serial execution is needed for debugging or manual log
 comparison.
-
-The harness defaults to `--cache-mode shared`, which prewarms one shared Go
-module/build cache under `<run-root>/shared-cache` while keeping databases,
-temporary directories, repo copies, and raw logs isolated per job. The eval
-database lives inside each copied repo at
-`<run-root>/production/<scenario>/repo/openplanner.db` so resumed multi-turn
-sessions can use the same local path as single-turn runs. Use
-`--cache-mode isolated` for apples-to-apples comparison with older reports.
 
 ## Metrics
 
@@ -68,31 +57,29 @@ Reports should include:
 - per-turn metrics and raw log references for multi-turn scenarios
 - tool calls, assistant calls, wall time, non-cache input tokens, and output
   tokens when the harness is running real agent sessions
-- generated-file inspection
-- generated paths surfaced from broad search
+- stale removed-interface path inspection
 - broad repo search
 - Go module-cache inspection
-- human-facing CLI usage
+- source-checkout runner usage instead of the installed `openplanner` binary
 - direct SQLite access
-- configured parallelism and actual harness elapsed seconds
 
 The production path is expected to call:
 
 ```bash
-go run ./cmd/openplanner-agentops planning
+openplanner planning
 ```
 
-Routine production runs should not inspect generated files, module caches, or
-SQLite directly, and should not use human-facing command discovery.
+Routine production runs should not inspect source files, module caches, or
+SQLite directly, and should not use source-checkout command discovery.
 
-Production AgentOps passes only when:
+Production passes only when:
 
 - production passes every selected scenario
 - rule-covered invalid-input scenarios are final-answer-only: no tools, no
   command executions, and at most one assistant answer
-- production has no direct generated-file inspection, generated-path broad
-  search, module-cache inspection, direct SQLite access, or CLI usage
-- production has no routine broad repo search
+- production has no stale removed-interface inspection, module-cache inspection,
+  direct SQLite access, source-checkout runner usage, or routine broad repo
+  search
 - aggregate command/tool counts and non-cached input token totals are reported
 
 OpenPlanner currently has no human CLI baseline variant, so CLI comparison gates
@@ -102,10 +89,5 @@ are intentionally `n/a` instead of mirrored from OpenHealth.
 
 Current reduced reports belong under `docs/agent-eval-results/`. Historical
 iteration artifacts should be archived under `docs/agent-eval-results/archive/`.
-The current eval-maturity and throughput reports are:
-
-- `docs/agent-eval-results/op-agentops-maturity-throughput-validation-smoke.md`
-- `docs/agent-eval-results/op-agentops-maturity-throughput-expansion-smoke.md`
-- `docs/agent-eval-results/op-agentops-maturity-throughput-speed-isolated.md`
-- `docs/agent-eval-results/op-agentops-maturity-throughput-speed-shared.md`
-- `docs/agent-eval-results/op-agentops-maturity-throughput-final.md`
+The current eval-maturity and throughput reports predate the installed-runner
+rename and remain as historical evidence until the next eval run updates them.

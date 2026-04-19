@@ -19,12 +19,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/yazanabuashour/openplanner/agentops"
+	"github.com/yazanabuashour/openplanner/internal/runner"
 	"github.com/yazanabuashour/openplanner/sdk"
 )
 
 const (
-	issueID               = "op-agentops"
+	issueID               = "op-runner"
 	modelName             = "gpt-5.4-mini"
 	reasoningEffort       = "medium"
 	defaultRunParallelism = 4
@@ -32,7 +32,7 @@ const (
 	cacheModeIsolated     = "isolated"
 )
 
-var prewarmCompilePackages = []string{"./cmd/openplanner-agentops", "./agentops"}
+var prewarmCompilePackages = []string{"./cmd/openplanner", "./internal/runner"}
 
 type scenario struct {
 	ID     string         `json:"id"`
@@ -412,7 +412,7 @@ func runCommand(args []string) {
 		RawLogsCommitted: false,
 		RawLogsNote:      "Raw codex exec event logs and stderr files were retained under <run-root> during execution and intentionally not committed.",
 		TokenUsageCaveat: "Token metrics come from codex exec turn.completed usage events when exposed; unavailable usage is recorded as not exposed.",
-		ComparisonStatus: "not applicable: OpenPlanner has no human CLI baseline variant; this report scores the production AgentOps surface only",
+		ComparisonStatus: "not applicable: OpenPlanner has no human CLI baseline variant; this report scores the production JSON runner surface only",
 	}
 
 	outDir := filepath.Join(repoRoot, "docs", "agent-eval-results")
@@ -501,8 +501,8 @@ func runOne(repoRoot string, runRoot string, currentScenario scenario, cache cac
 	if err := timedPhase(&timings.CopyRepo, func() error { return copyRepo(repoRoot, runRepo) }); err != nil {
 		return runResult{}, fmt.Errorf("copy repo: %w", err)
 	}
-	if err := timedPhase(&timings.InstallVariant, func() error { return installEvalAgentsFile(runRepo) }); err != nil {
-		return runResult{}, fmt.Errorf("install eval agents file: %w", err)
+	if err := timedPhase(&timings.InstallVariant, func() error { return installEvalRunnerAndSkill(runRepo, runDir) }); err != nil {
+		return runResult{}, fmt.Errorf("install eval runner and skill: %w", err)
 	}
 	if cache.Mode == cacheModeIsolated {
 		if err := timedPhase(&timings.WarmCache, func() error { return warmGoModules(runRepo, runDir, dbPath, cache) }); err != nil {
@@ -683,6 +683,7 @@ func evalEnv(runDir string, dbPath string, cache cacheConfig) []string {
 		"GOCACHE="+paths.GoCache,
 		"GOMODCACHE="+paths.GoModCache,
 		"TMPDIR="+paths.Temp,
+		"PATH="+filepath.Join(runDir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	return env
 }
@@ -964,37 +965,37 @@ func seedScenario(dbPath string, sc scenario) error {
 }
 
 func seedAgendaRange(dbPath string) error {
-	requests := []agentops.PlanningTaskRequest{
-		{Action: agentops.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Review notes", DueDate: "2026-04-16"},
-		{Action: agentops.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Standup", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T10:00:00Z"},
-		{Action: agentops.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Out of range", StartAt: "2026-04-17T09:00:00Z", EndAt: "2026-04-17T10:00:00Z"},
+	requests := []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Review notes", DueDate: "2026-04-16"},
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Standup", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T10:00:00Z"},
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Out of range", StartAt: "2026-04-17T09:00:00Z", EndAt: "2026-04-17T10:00:00Z"},
 	}
 	return runSeedRequests(dbPath, requests)
 }
 
 func seedEventFilter(dbPath string) error {
-	requests := []agentops.PlanningTaskRequest{
-		{Action: agentops.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Work sync", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T09:30:00Z"},
-		{Action: agentops.PlanningTaskActionCreateEvent, CalendarName: "Personal", Title: "Personal appointment", StartAt: "2026-04-16T10:00:00Z", EndAt: "2026-04-16T10:30:00Z"},
+	requests := []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Work", Title: "Work sync", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T09:30:00Z"},
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Personal", Title: "Personal appointment", StartAt: "2026-04-16T10:00:00Z", EndAt: "2026-04-16T10:30:00Z"},
 	}
 	return runSeedRequests(dbPath, requests)
 }
 
 func seedReviewTask(dbPath string) error {
-	return runSeedRequests(dbPath, []agentops.PlanningTaskRequest{
-		{Action: agentops.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Review notes", DueDate: "2026-04-16"},
-		{Action: agentops.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Work backlog", DueDate: "2026-04-16"},
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Review notes", DueDate: "2026-04-16"},
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Work backlog", DueDate: "2026-04-16"},
 	})
 }
 
 func seedRecurringTask(dbPath string) error {
 	count := int32(3)
-	return runSeedRequests(dbPath, []agentops.PlanningTaskRequest{
-		{Action: agentops.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Daily review", DueDate: "2026-04-16", Recurrence: &agentops.RecurrenceRuleRequest{Frequency: "daily", Count: &count}},
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Daily review", DueDate: "2026-04-16", Recurrence: &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count}},
 	})
 }
 
-func runSeedRequests(dbPath string, requests []agentops.PlanningTaskRequest) error {
+func runSeedRequests(dbPath string, requests []runner.PlanningTaskRequest) error {
 	for _, request := range requests {
 		result, err := runPlanning(dbPath, request)
 		if err != nil {
@@ -1110,7 +1111,7 @@ func calendarNameExists(calendars []sdk.Calendar, name string) bool {
 }
 
 func verifyEvents(dbPath string, finalMessage string, expected []eventState, forbidden []string) (verificationResult, error) {
-	result, err := runPlanning(dbPath, agentops.PlanningTaskRequest{Action: agentops.PlanningTaskActionListEvents, Limit: intPtr(100)})
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListEvents, Limit: intPtr(100)})
 	if err != nil {
 		return verificationResult{}, err
 	}
@@ -1131,7 +1132,7 @@ func verifyEvents(dbPath string, finalMessage string, expected []eventState, for
 }
 
 func verifyTasks(dbPath string, finalMessage string, expected []taskState, forbidden []string, requireCompleted bool) (verificationResult, error) {
-	result, err := runPlanning(dbPath, agentops.PlanningTaskRequest{Action: agentops.PlanningTaskActionListTasks, Limit: intPtr(100)})
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListTasks, Limit: intPtr(100)})
 	if err != nil {
 		return verificationResult{}, err
 	}
@@ -1152,8 +1153,8 @@ func verifyTasks(dbPath string, finalMessage string, expected []taskState, forbi
 }
 
 func verifyAgendaRange(dbPath string, finalMessage string) (verificationResult, error) {
-	result, err := runPlanning(dbPath, agentops.PlanningTaskRequest{
-		Action: agentops.PlanningTaskActionListAgenda,
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{
+		Action: runner.PlanningTaskActionListAgenda,
 		From:   "2026-04-16T00:00:00Z",
 		To:     "2026-04-17T00:00:00Z",
 		Limit:  intPtr(100),
@@ -1176,8 +1177,8 @@ func verifyAgendaRange(dbPath string, finalMessage string) (verificationResult, 
 }
 
 func verifyRecurringTaskCompletion(dbPath string, finalMessage string) (verificationResult, error) {
-	result, err := runPlanning(dbPath, agentops.PlanningTaskRequest{
-		Action: agentops.PlanningTaskActionListAgenda,
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{
+		Action: runner.PlanningTaskActionListAgenda,
 		From:   "2026-04-17T00:00:00Z",
 		To:     "2026-04-18T00:00:00Z",
 		Limit:  intPtr(100),
@@ -1212,11 +1213,11 @@ func verifyFinalAnswerOnlyRejection(dbPath string, finalMessage string, anyKeywo
 	}, nil
 }
 
-func runPlanning(dbPath string, request agentops.PlanningTaskRequest) (agentops.PlanningTaskResult, error) {
-	return agentops.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: dbPath}, request)
+func runPlanning(dbPath string, request runner.PlanningTaskRequest) (runner.PlanningTaskResult, error) {
+	return runner.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: dbPath}, request)
 }
 
-func eventExists(events []agentops.EventEntry, want eventState) bool {
+func eventExists(events []runner.EventEntry, want eventState) bool {
 	for _, event := range events {
 		if event.Title != want.Title {
 			continue
@@ -1235,7 +1236,7 @@ func eventExists(events []agentops.EventEntry, want eventState) bool {
 	return false
 }
 
-func taskExists(tasks []agentops.TaskEntry, want taskState, requireCompleted bool) bool {
+func taskExists(tasks []runner.TaskEntry, want taskState, requireCompleted bool) bool {
 	for _, task := range tasks {
 		if task.Title != want.Title {
 			continue
@@ -1530,14 +1531,34 @@ func copyFile(src string, dst string, mode fs.FileMode) error {
 	return out.Close()
 }
 
-func installEvalAgentsFile(runRepo string) error {
+func installEvalRunnerAndSkill(runRepo string, runDir string) error {
+	binDir := filepath.Join(runDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, "openplanner"), "./cmd/openplanner")
+	cmd.Dir = runRepo
+	cmd.Env = evalEnv(runDir, evalDatabasePath(runRepo), cacheConfig{Mode: cacheModeIsolated})
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("build openplanner runner: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	skillDir := filepath.Join(runRepo, ".agents", "skills", "openplanner")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return err
+	}
+	if err := copyFile(filepath.Join(runRepo, "skills", "openplanner", "SKILL.md"), filepath.Join(skillDir, "SKILL.md"), 0o644); err != nil {
+		return err
+	}
+
 	content := `# OpenPlanner Eval Instructions
 
-For direct local OpenPlanner calendar or task requests, act as a product data agent, not a repo maintainer. Do not run bd prime, inspect .agents, inspect source/generated files, inspect the Go module cache, query SQLite directly, or search the repo before the first runner call.
+For direct local OpenPlanner calendar or task requests, act as a product data agent, not a repo maintainer. Do not run bd prime, inspect source files, inspect the Go module cache, query SQLite directly, or search the repo before the first runner call.
 
 Reject final-answer-only, with exactly one assistant answer and no tools or DB check, for ambiguous short dates with no year, year-first slash dates like 2026/04/16, invalid RFC3339 times, missing required titles, unsupported recurrence values, invalid ranges, or non-positive limits. Do not first announce skill use or process. Never convert a year-first slash date to dashed ISO form; reject it. Never convert an invalid RFC3339 time like 2026-04-16 09:00 to 2026-04-16T09:00:00Z; reject it. 04/16/2026 may become 2026-04-16.
 
-For valid tasks, pipe one JSON request to go run ./cmd/openplanner-agentops planning and answer from JSON only. Use calendar_name for create requests. Use strict YYYY-MM-DD dates for all-day events, date-based tasks, and occurrence dates; use RFC3339 for timed fields and agenda ranges.
+For valid tasks, pipe one JSON request to openplanner planning and answer from JSON only. Use calendar_name for create requests. Use strict YYYY-MM-DD dates for all-day events, date-based tasks, and occurrence dates; use RFC3339 for timed fields and agenda ranges.
 
 Every request JSON must include action. Exact one-line shapes:
 {"action":"ensure_calendar","calendar_name":"Personal"}
@@ -1675,9 +1696,9 @@ func productionScoreFor(results []runResult) productionScore {
 			allPassed = false
 		}
 	}
-	recommendation := "prefer_agentops_for_routine_openplanner_operations"
+	recommendation := "prefer_runner_for_routine_openplanner_operations"
 	if !allPassed {
-		recommendation = "review_agentops_eval_failures_before_recommending"
+		recommendation = "review_runner_eval_failures_before_recommending"
 	}
 	return productionScore{Recommendation: recommendation, Passed: allPassed, Criteria: criteria}
 }
@@ -1742,7 +1763,7 @@ func finalAnswerOnlyDetails(failures []string) string {
 
 func forbiddenInspectionDetails(failures []string) string {
 	if len(failures) == 0 {
-		return "no generated-file inspection, generated-path broad search, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
+		return "no removed-interface path inspection, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
 	}
 	return fmt.Sprintf("forbidden inspection or CLI usage detected in: %s", sortedJoin(failures))
 }
@@ -1757,7 +1778,7 @@ func writeJSON(path string, value any) error {
 
 func writeMarkdown(path string, value report) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# OpenPlanner AgentOps Eval %s\n\n", value.Date)
+	fmt.Fprintf(&b, "# OpenPlanner JSON Runner Eval %s\n\n", value.Date)
 	fmt.Fprintf(&b, "- Model: `%s`\n", value.Model)
 	fmt.Fprintf(&b, "- Reasoning effort: `%s`\n", value.ReasoningEffort)
 	fmt.Fprintf(&b, "- Parallelism: `%d`\n", value.Parallelism)
@@ -1876,13 +1897,7 @@ func inspectsModuleCache(command string) bool {
 func usesOpenPlannerCLI(command string) bool {
 	fields := commandFields(command)
 	for i := 0; i < len(fields); i++ {
-		if fields[i] == "openplanner" || strings.HasSuffix(fields[i], "/openplanner") {
-			return true
-		}
-		if fields[i] == "./cmd/openplanner" || strings.HasSuffix(fields[i], "/cmd/openplanner") {
-			return true
-		}
-		if fields[i] == "go" && i+2 < len(fields) && fields[i+1] == "run" && strings.Contains(fields[i+2], "cmd/openplanner") && !strings.Contains(fields[i+2], "openplanner-agentops") {
+		if fields[i] == "go" && i+2 < len(fields) && fields[i+1] == "run" && strings.Contains(fields[i+2], "cmd/openplanner") {
 			return true
 		}
 	}

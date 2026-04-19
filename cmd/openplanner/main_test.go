@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yazanabuashour/openplanner/agentops"
+	"github.com/yazanabuashour/openplanner/internal/runner"
 )
 
 func TestPlanningRunnerJSONRoundTripAndDBFlag(t *testing.T) {
@@ -23,7 +23,7 @@ func TestPlanningRunnerJSONRoundTripAndDBFlag(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
 	}
 
-	var result agentops.PlanningTaskResult
+	var result runner.PlanningTaskResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode result: %v\n%s", err, stdout.String())
 	}
@@ -82,7 +82,7 @@ func TestPlanningRunnerValidationRejectionIsJSON(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
 	}
 
-	var result agentops.PlanningTaskResult
+	var result runner.PlanningTaskResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}

@@ -1,17 +1,17 @@
 ---
 name: openplanner
-description: Manage local calendar and task workflows through OpenPlanner's AgentOps JSON runner; reject ambiguous dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly before tools.
+description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner; reject ambiguous dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly before tools.
 license: MIT
-compatibility: Requires Go 1.26.2+ and local filesystem access for SQLite storage. OpenPlanner runs in process and does not require a daemon, localhost service, auth flow, or runtime network access.
+compatibility: Requires local filesystem access and an installed openplanner binary on PATH.
 ---
 
-# OpenPlanner AgentOps
+# OpenPlanner
 
-Use this skill for local-first planning tasks. The production agent interface is
-the machine-facing JSON runner:
+Use this skill for local-first calendar and task planning. The production agent
+interface is the installed JSON runner:
 
 ```bash
-go run ./cmd/openplanner-agentops planning
+openplanner planning
 ```
 
 Send one JSON request on stdin and answer only from the JSON result on stdout.
@@ -34,15 +34,15 @@ Supported routine actions are:
 For event and task creation, prefer `calendar_name`. The runner ensures that
 calendar internally so agents do not need to discover or shuttle calendar IDs.
 
-For unsupported OpenPlanner workflows, say the production AgentOps skill does
+For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
 user explicitly asks for one.
 
 ## Reject Before Tools
 
-For the cases below, reject or clarify directly without running code, opening
-references, inspecting files, searching the repo, checking the database, using
-the AgentOps runner, or calling any CLI when the request has:
+For the cases below, reject or clarify directly without running code, inspecting
+files, searching the repo, checking the database, using the runner, or calling
+any CLI when the request has:
 
 | Issue | Response |
 | --- | --- |
@@ -60,12 +60,10 @@ convert an invalid RFC3339 time like `2026-04-16 09:00` to
 such as `04/16/2026`, may be normalized to `2026-04-16`.
 
 Do not write local OpenPlanner data through SQLite directly. Do not inspect
-generated API bindings, generated request builders, the Go module cache, or
-large dependency directories for routine planning tasks. This skill and its
-linked reference are the routine task contract; do not inspect source files,
-tests, generated code, or module-cache docs to rediscover request/result shapes
-before the first task run. Only search the repository if the AgentOps runner
-fails in a way that requires debugging the local checkout.
+source files, tests, Go module-cache docs, or large dependency directories to
+rediscover request/result shapes before the first task run. Only search the
+repository if the runner fails in a way that requires debugging the local
+checkout.
 
 ## Runner Pattern
 
@@ -73,13 +71,15 @@ Use this shape for supported tasks, changing only the JSON payload:
 
 ```bash
 printf '%s\n' '{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z"}' \
-  | go run ./cmd/openplanner-agentops planning
+  | openplanner planning
 ```
 
 Common one-line payloads:
 `{"action":"ensure_calendar","calendar_name":"Personal"}`;
 `{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z"}`;
+`{"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}`;
 `{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}`;
+`{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}`;
 `{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}`;
 `{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}`;
 `{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}`;
@@ -95,5 +95,3 @@ and occurrence dates. Use RFC3339 values for timed fields such as `start_at`,
 When reporting results, answer from JSON `writes`, `calendars`, `events`,
 `tasks`, `agenda`, or `rejection_reason`. Agenda results are already
 chronologically ordered.
-
-Copyable request examples live at [references/planning.md](references/planning.md).

@@ -34,7 +34,7 @@ jobs:
         run: make check
 
   package-release:
-    name: Package and attest source release
+    name: Package and attest release
     needs: verify
     runs-on: ubuntu-latest
     permissions:
@@ -45,6 +45,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       archive_name: ${{ steps.meta.outputs.archive_name }}
+      skill_name: ${{ steps.meta.outputs.skill_name }}
       sbom_name: ${{ steps.meta.outputs.sbom_name }}
       checksums_name: ${{ steps.meta.outputs.checksums_name }}
     steps:
@@ -53,6 +54,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
           fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Derive release metadata
         id: meta
@@ -71,9 +78,36 @@ jobs:
 
           echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "archive_name=openplanner-${version}-source.tar.gz" >> "${GITHUB_OUTPUT}"
-          echo "sbom_name=openplanner-${version}.spdx.json" >> "${GITHUB_OUTPUT}"
-          echo "checksums_name=openplanner-${version}.SHA256SUMS" >> "${GITHUB_OUTPUT}"
+          asset_version="${version#v}"
+          echo "asset_version=${asset_version}" >> "${GITHUB_OUTPUT}"
+          echo "archive_name=openplanner_${asset_version}_source.tar.gz" >> "${GITHUB_OUTPUT}"
+          echo "skill_name=openplanner_${asset_version}_skill.tar.gz" >> "${GITHUB_OUTPUT}"
+          echo "sbom_name=openplanner_${asset_version}_sbom.spdx.json" >> "${GITHUB_OUTPUT}"
+          echo "checksums_name=openplanner_${asset_version}_checksums.txt" >> "${GITHUB_OUTPUT}"
+
+      - name: Build runner and skill archives
+        env:
+          ASSET_VERSION: ${{ steps.meta.outputs.asset_version }}
+          SKILL_NAME: ${{ steps.meta.outputs.skill_name }}
+        run: |
+          mkdir -p release-assets
+          targets=(
+            "darwin/arm64"
+            "darwin/amd64"
+            "linux/amd64"
+            "linux/arm64"
+          )
+
+          for target in "${targets[@]}"; do
+            IFS=/ read -r os arch <<< "${target}"
+            name="openplanner_${ASSET_VERSION}_${os}_${arch}"
+            mkdir -p "release-assets/${name}"
+            GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "release-assets/${name}/openplanner" ./cmd/openplanner
+            tar -C release-assets -czf "release-assets/${name}.tar.gz" "${name}"
+            rm -rf "release-assets/${name}"
+          done
+
+          tar -czf "release-assets/${SKILL_NAME}" -C skills/openplanner SKILL.md
 
       - name: Build deterministic source archive
         env:
@@ -102,7 +136,7 @@ jobs:
           CHECKSUMS_NAME: ${{ steps.meta.outputs.checksums_name }}
         run: |
           cd release-assets
-          sha256sum "${ARCHIVE_NAME}" "${SBOM_NAME}" > "${CHECKSUMS_NAME}"
+          sha256sum *.tar.gz "${SBOM_NAME}" > "${CHECKSUMS_NAME}"
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -110,10 +144,10 @@ jobs:
           name: release-assets
           path: release-assets/*.*
 
-      - name: Attest source provenance
+      - name: Attest release provenance
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
         with:
-          subject-path: ./release-assets/${{ steps.meta.outputs.archive_name }}
+          subject-path: ./release-assets/*.*
 
       - name: Attest SBOM
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
@@ -146,4 +180,4 @@ jobs:
               --generate-notes
           fi
 
-          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber
+          gh release upload "${GITHUB_REF_NAME}" release-assets/*.* --clobber

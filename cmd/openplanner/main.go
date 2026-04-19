@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/yazanabuashour/openplanner/agentops"
+	"github.com/yazanabuashour/openplanner/internal/runner"
 	"github.com/yazanabuashour/openplanner/sdk"
 )
 
@@ -18,7 +18,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: openplanner-agentops planning [--db path]")
+		_, _ = fmt.Fprintln(stderr, "usage: openplanner planning [--db path]")
 		return 2
 	}
 
@@ -43,7 +43,7 @@ func runPlanning(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		return 2
 	}
 
-	var request agentops.PlanningTaskRequest
+	var request runner.PlanningTaskRequest
 	decoder := json.NewDecoder(stdin)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
@@ -56,7 +56,7 @@ func runPlanning(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		resolvedDatabasePath = os.Getenv("OPENPLANNER_DATABASE_PATH")
 	}
 
-	result, err := agentops.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: resolvedDatabasePath}, request)
+	result, err := runner.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: resolvedDatabasePath}, request)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "run planning task: %v\n", err)
 		return 1

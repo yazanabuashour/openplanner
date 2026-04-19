@@ -2,19 +2,15 @@ package sdk
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 
-	"github.com/yazanabuashour/openplanner/internal/api"
 	"github.com/yazanabuashour/openplanner/internal/service"
 	"github.com/yazanabuashour/openplanner/internal/store"
-	"github.com/yazanabuashour/openplanner/sdk/generated"
 )
 
 const (
 	defaultDatabaseName = "openplanner.db"
-	localBaseURL        = "http://openplanner.invalid"
 )
 
 type Options struct {
@@ -24,12 +20,11 @@ type Options struct {
 }
 
 type Client struct {
-	*generated.APIClient
 	service *service.Service
 	closeFn func() error
 }
 
-// OpenLocal opens the generated client against the in-process local transport.
+// OpenLocal opens the direct local OpenPlanner runtime.
 func OpenLocal(options Options) (*Client, error) {
 	databasePath, err := resolveDatabasePath(options.DatabasePath)
 	if err != nil {
@@ -45,23 +40,9 @@ func OpenLocal(options Options) (*Client, error) {
 		return nil, err
 	}
 
-	localService := service.New(repository)
-	handler := api.NewHandler(localService)
-	configuration := generated.NewConfiguration()
-	configuration.HTTPClient = &http.Client{
-		Transport: &localRoundTripper{handler: handler},
-	}
-	configuration.Servers = generated.ServerConfigurations{
-		{
-			URL:         localBaseURL,
-			Description: "Placeholder base URL for the in-process transport. No network listener is started.",
-		},
-	}
-
 	return &Client{
-		APIClient: generated.NewAPIClient(configuration),
-		service:   localService,
-		closeFn:   repository.Close,
+		service: service.New(repository),
+		closeFn: repository.Close,
 	}, nil
 }
 
