@@ -79,35 +79,46 @@ checkout.
 
 ## Runner Pattern
 
-Use this shape for supported tasks, changing only the JSON payload:
+Pipe one JSON request to `openplanner planning` and answer only from JSON
+`writes`, `calendars`, `events`, `tasks`, `agenda`, or `rejection_reason`.
+Agenda results are already chronologically ordered.
 
-```bash
-printf '%s\n' '{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z"}' \
-  | openplanner planning
+Calendars:
+
+```json
+{"action":"ensure_calendar","calendar_name":"Personal"}
+{"action":"update_calendar","calendar_name":"Work","description":null,"color":"#2563EB"}
 ```
 
-Common one-line payloads:
-`{"action":"ensure_calendar","calendar_name":"Personal"}`;
-`{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z"}`;
-`{"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}`;
-`{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}`;
-`{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}`;
-`{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}`;
-`{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}`;
-`{"action":"update_calendar","calendar_name":"Work","description":null,"color":"#2563EB"}`;
-`{"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}`;
-`{"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}`;
-`{"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}`;
-`{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}`;
-`{"action":"list_events","calendar_name":"Work","limit":1}`;
-`{"action":"list_tasks","calendar_name":"Personal","limit":1}`;
-`{"action":"complete_task","task_id":"<id-from-prior-runner-result>"}`;
-`{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}`.
+Events:
+
+```json
+{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z"}
+{"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}
+{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}
+{"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}
+{"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}
+```
+
+Tasks:
+
+```json
+{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}
+{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}
+{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}
+{"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}
+{"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
+{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
+```
+
+Lists:
+
+```json
+{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}
+{"action":"list_events","calendar_name":"Work","limit":1}
+{"action":"list_tasks","calendar_name":"Personal","limit":1}
+```
 
 Use strict `YYYY-MM-DD` date-only values for all-day events, date-based tasks,
 and occurrence dates. Use RFC3339 values for timed fields such as `start_at`,
 `end_at`, `due_at`, `from`, `to`, and `occurrence_at`.
-
-When reporting results, answer from JSON `writes`, `calendars`, `events`,
-`tasks`, `agenda`, or `rejection_reason`. Agenda results are already
-chronologically ordered.
