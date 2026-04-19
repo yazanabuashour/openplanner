@@ -9,7 +9,6 @@ import (
 	"os"
 
 	"github.com/yazanabuashour/openplanner/internal/runner"
-	"github.com/yazanabuashour/openplanner/sdk"
 )
 
 func main() {
@@ -54,7 +53,7 @@ func runPlanning(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		resolvedDatabasePath = os.Getenv("OPENPLANNER_DATABASE_PATH")
 	}
 
-	result, err := runner.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: resolvedDatabasePath}, request)
+	result, err := runner.RunPlanningTask(context.Background(), runner.Options{DatabasePath: resolvedDatabasePath}, request)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "run planning task: %v\n", err)
 		return 1

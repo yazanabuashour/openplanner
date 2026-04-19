@@ -194,8 +194,6 @@ func validateOpenPlannerGuidance(skillFile string, content string) error {
 		"go run ./cmd/openplanner",
 		"openplanner-agentops",
 		"AgentOps",
-		"Generated Client Fallback",
-		"sdk/generated",
 		"openapi",
 		"OpenAPI",
 		"temporary Go module",

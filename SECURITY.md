@@ -2,7 +2,9 @@
 
 ## Supported versions
 
-This project is pre-`1.0` and ships an embeddable Go module with in-process local transport. The supported code line is the current default branch and the most recent `0.y.z` tag, if one exists.
+This project is pre-`1.0` and ships a local JSON runner with SQLite-backed
+storage. The supported code line is the current default branch and the most
+recent `0.y.z` tag, if one exists.
 
 Older pre-`1.0` tags are not guaranteed to receive fixes or backports.
 

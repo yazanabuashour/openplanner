@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/yazanabuashour/openplanner/sdk"
 )
 
 func TestRunPlanningTaskEnsureCalendarStatuses(t *testing.T) {
@@ -25,7 +23,7 @@ func TestRunPlanningTaskEnsureCalendarStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if created.Rejected || len(created.Writes) != 1 || created.Writes[0].Status != string(sdk.CalendarWriteStatusCreated) {
+	if created.Rejected || len(created.Writes) != 1 || created.Writes[0].Status != "created" {
 		t.Fatalf("create result = %#v", created)
 	}
 
@@ -37,7 +35,7 @@ func TestRunPlanningTaskEnsureCalendarStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repeat calendar: %v", err)
 	}
-	if repeated.Rejected || repeated.Writes[0].Status != string(sdk.CalendarWriteStatusAlreadyExists) {
+	if repeated.Rejected || repeated.Writes[0].Status != "already_exists" {
 		t.Fatalf("repeat result = %#v", repeated)
 	}
 
@@ -50,7 +48,7 @@ func TestRunPlanningTaskEnsureCalendarStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update calendar: %v", err)
 	}
-	if updated.Rejected || updated.Writes[0].Status != string(sdk.CalendarWriteStatusUpdated) {
+	if updated.Rejected || updated.Writes[0].Status != "updated" {
 		t.Fatalf("update result = %#v", updated)
 	}
 }
@@ -455,7 +453,7 @@ func TestRunPlanningTaskUpdatePatchDateRejectionsBeforeDatabaseCreation(t *testi
 			if err != nil {
 				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
 			}
-			result, err := RunPlanningTask(context.Background(), sdk.Options{DatabasePath: databasePath}, request)
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, request)
 			if err != nil {
 				t.Fatalf("RunPlanningTask(): %v", err)
 			}
@@ -541,7 +539,7 @@ func TestRunPlanningTaskValidationRejectionsBeforeDatabaseCreation(t *testing.T)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := RunPlanningTask(context.Background(), sdk.Options{DatabasePath: databasePath}, test.request)
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, test.request)
 			if err != nil {
 				t.Fatalf("RunPlanningTask() error = %v", err)
 			}
@@ -555,9 +553,9 @@ func TestRunPlanningTaskValidationRejectionsBeforeDatabaseCreation(t *testing.T)
 	}
 }
 
-func testOptions(t *testing.T) sdk.Options {
+func testOptions(t *testing.T) Options {
 	t.Helper()
-	return sdk.Options{DatabasePath: filepath.Join(t.TempDir(), "openplanner.db")}
+	return Options{DatabasePath: filepath.Join(t.TempDir(), "openplanner.db")}
 }
 
 func intPtr(value int) *int {

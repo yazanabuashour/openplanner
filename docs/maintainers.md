@@ -3,11 +3,10 @@
 This repository uses **Beads** (`bd`) in embedded mode for maintainer task tracking.
 The embedded Dolt database is authoritative; `.beads/issues.jsonl` is only a local JSONL export/backup and must stay untracked.
 
-This repository is public and its release surface is an embeddable Go module, an
-installed JSON runner, an Agent Skills-compatible skill, and release integrity
-metadata. There is still no hosted service, no auth-backed product surface, no
-background daemon, and no package registry beyond the Go module/tag flow. Keep
-maintainer docs honest about that status.
+This repository is public and its release surface is an installed JSON runner,
+an Agent Skills-compatible skill, and release integrity metadata. There is still
+no hosted service, no auth-backed product surface, no background daemon, and no
+package registry. Keep maintainer docs honest about that status.
 
 ## Initial Setup
 
@@ -70,9 +69,8 @@ Current readiness assumptions:
 - `main` is the protected default branch.
 - Pull requests run only untrusted-safe validation with read-only token scope.
 - GitHub Releases are created from version tags in the `v0.y.z` form.
-- The distributable surface is the Go module resolved from those tags, platform
-  archives for the `openplanner` runner, the portable skill archive, and release
-  integrity assets.
+- The distributable surface is platform archives for the `openplanner` runner,
+  the portable skill archive, and release integrity assets.
 - Release packaging publishes binary archives, a skill archive, deterministic
   source archive, `SHA256SUMS`, SPDX SBOM, and GitHub attestations.
 - The runtime remains in process. Do not add deploy workflows, ports, or daemons unless the product surface changes intentionally.
@@ -100,7 +98,8 @@ The release workflow has two paths:
   publishes a GitHub Release and uploads runner archives, the skill archive, the
   source archive, `SHA256SUMS`, and SBOM.
 
-The first public tag should be `v0.1.0`. Users consume the SDK with `go get github.com/yazanabuashour/openplanner/sdk@v0.1.0` for that release, then continue using the same package path for later `v0.y.z` tags.
+The first public tag should be `v0.1.0`. Users consume OpenPlanner through the
+runner archive or installer plus the matching portable skill payload.
 
 Before tagging:
 

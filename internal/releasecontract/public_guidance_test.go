@@ -22,10 +22,7 @@ func TestPublicGuidanceUsesCodeFirstRunnerSurface(t *testing.T) {
 	forbidden := []string{
 		"openplanner-agentops",
 		"go run ./cmd/openplanner",
-		"sdk/generated",
 		"openapi/openapi.yaml",
-		"generated client",
-		"generated-client",
 		"OpenAPI contract",
 	}
 

@@ -9,9 +9,6 @@ instruction is needed, put it in the production skill first.
 - `production`: the installed `skills/openplanner/SKILL.md` skill plus an
   installed `openplanner` runner on `PATH`.
 
-The SDK remains a supported Go developer/runtime API, but it is not the
-production agent-facing eval variant.
-
 ## Scenario Coverage
 
 The production matrix covers routine local planning tasks:

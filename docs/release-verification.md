@@ -12,7 +12,7 @@ tag:
 
 The platform archives contain the production `openplanner` runner binary. The
 skill archive contains the single shipped `SKILL.md` payload. The source archive
-is the canonical source artifact for the Go module and local runtime. The
+is the canonical source artifact for the local runtime. The
 installer script downloads and verifies the matching platform archive before
 installing the same-tag runner. It then prints the required second step:
 register the same-tag skill source or archive with the user's agent using that
@@ -35,27 +35,6 @@ gh attestation verify install.sh --repo yazanabuashour/openplanner
 
 If these commands succeed, the assets match the published checksums and have
 valid GitHub attestations for this repository.
-
-## Verify the module install story
-
-Install the tagged SDK package:
-
-```bash
-go get github.com/yazanabuashour/openplanner/sdk@v0.1.0
-```
-
-Go resolves that package version from the root module tag at
-`github.com/yazanabuashour/openplanner`.
-
-Then open the SDK locally with the default SQLite path:
-
-```go
-client, err := sdk.OpenLocal(sdk.Options{})
-```
-
-By default, the SQLite file is created at
-`${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. If a caller sets
-`DatabasePath`, OpenPlanner uses that path instead.
 
 ## Verify the runner story
 

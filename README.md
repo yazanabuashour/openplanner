@@ -2,7 +2,7 @@
 
 OpenPlanner is a local-first planning runtime for agent-facing calendar and task
 workflows. It ships an installed `openplanner` JSON runner, an Agent
-Skills-compatible skill, and a direct local Go SDK backed by SQLite storage.
+Skills-compatible skill, and SQLite-backed local storage.
 
 ## Agent Install
 
@@ -82,74 +82,6 @@ fields are set, and `null` clears clearable optional fields. Use `event_id` for
 `update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
 `calendar_name` for `update_calendar`.
 
-## Local Go SDK
-
-Go developers can embed the same local runtime directly:
-
-```bash
-go get github.com/yazanabuashour/openplanner@main
-```
-
-Minimal usage from Go:
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/yazanabuashour/openplanner/sdk"
-)
-
-func main() {
-	client, err := sdk.OpenLocal(sdk.Options{})
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
-
-	ctx := context.Background()
-	calendar, err := client.EnsureCalendar(ctx, sdk.CalendarInput{Name: "Personal"})
-	if err != nil {
-		panic(err)
-	}
-
-	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
-	endAt := startAt.Add(time.Hour)
-	event, err := client.CreateEvent(ctx, sdk.EventInput{
-		CalendarID: calendar.Calendar.ID,
-		Title:      "Standup",
-		StartAt:    &startAt,
-		EndAt:      &endAt,
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	if _, err := client.UpdateEvent(ctx, event.ID, sdk.EventPatchInput{
-		Description: sdk.ClearPatch[string](),
-	}); err != nil {
-		panic(err)
-	}
-
-	agenda, err := client.ListAgenda(ctx, sdk.AgendaOptions{
-		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
-		To:   time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println(len(agenda.Items))
-}
-```
-
-`sdk.OpenLocal(...)` opens SQLite locally and calls the same local planning
-service used by the runner. There is no hosted service, remote API contract,
-daemon, or localhost listener in the release surface.
-
 ## Development
 
 Install the pinned toolchain with:
@@ -172,7 +104,7 @@ make check
 ```
 
 `make check` runs formatting validation, Agent Skills validation, the Go test
-suite, a temp-module packaging smoke test, `govulncheck`, and `golangci-lint`.
+suite, `govulncheck`, and `golangci-lint`.
 
 ## Release Contract
 
@@ -180,14 +112,11 @@ The `0.1.0` release deliverables are:
 
 - platform archives for the `openplanner` runner binary
 - the single-file `openplanner` skill archive
-- the Go module import path rooted at `github.com/yazanabuashour/openplanner`
-- the direct-local Go package at `github.com/yazanabuashour/openplanner/sdk`
 - a canonical source archive, SHA256 checksums, an SPDX SBOM, and GitHub
   attestations for release verification
 
-Until `v0.1.0` exists, local development should use a local `replace` directive,
-a pseudo-version from `main`, or `@main`. After the first tag lands, consumers
-should use the tagged root module version.
+Until `v0.1.0` exists, local development should build the runner from a checkout
+or install from `main`.
 
 ## Repository Contents
 
@@ -198,9 +127,7 @@ should use the tagged root module version.
 - [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows.
 - [internal/runner](internal/runner) contains the JSON-friendly task facade for production agent workflows.
 - [cmd/openplanner](cmd/openplanner) contains the installed JSON runner.
-- [sdk](sdk) contains the direct local Go SDK.
 - [skills/openplanner/SKILL.md](skills/openplanner/SKILL.md) is the portable Agent Skills-compatible OpenPlanner skill.
-- [examples/openplanner/agenda](examples/openplanner/agenda) demonstrates a local recurring event/task workflow.
 - [LICENSE](LICENSE) defines the project license.
 
 ## Contributing

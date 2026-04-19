@@ -13,8 +13,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/yazanabuashour/openplanner/internal/domain"
 	internalservice "github.com/yazanabuashour/openplanner/internal/service"
-	"github.com/yazanabuashour/openplanner/sdk"
 )
 
 const (
@@ -58,9 +58,9 @@ type PlanningTaskRequest struct {
 	Cursor         string                 `json:"cursor,omitempty"`
 	Limit          *int                   `json:"limit,omitempty"`
 
-	CalendarPatch sdk.CalendarPatchInput `json:"-"`
-	EventPatch    sdk.EventPatchInput    `json:"-"`
-	TaskPatch     sdk.TaskPatchInput     `json:"-"`
+	CalendarPatch domain.CalendarPatch `json:"-"`
+	EventPatch    domain.EventPatch    `json:"-"`
+	TaskPatch     domain.TaskPatch     `json:"-"`
 }
 
 type RecurrenceRuleRequest struct {
@@ -152,19 +152,19 @@ type RecurrenceRuleResult struct {
 
 type normalizedPlanningTaskRequest struct {
 	Action        string
-	CalendarInput sdk.CalendarInput
-	CalendarPatch sdk.CalendarPatchInput
+	CalendarInput domain.Calendar
+	CalendarPatch domain.CalendarPatch
 	CalendarName  string
 	CalendarID    string
 	EventID       string
-	EventInput    sdk.EventInput
-	EventPatch    sdk.EventPatchInput
-	TaskInput     sdk.TaskInput
-	TaskPatch     sdk.TaskPatchInput
-	ListOptions   sdk.ListOptions
-	AgendaOptions sdk.AgendaOptions
+	EventInput    domain.Event
+	EventPatch    domain.EventPatch
+	TaskInput     domain.Task
+	TaskPatch     domain.TaskPatch
+	ListOptions   domain.PageParams
+	AgendaOptions domain.AgendaParams
 	TaskID        string
-	Completion    sdk.TaskCompletionInput
+	Completion    domain.TaskCompletionRequest
 }
 
 func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
@@ -256,64 +256,64 @@ func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRe
 	request.TaskPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
 }
 
-func jsonStringPatch(raw map[string]json.RawMessage, key string) sdk.PatchField[string] {
+func jsonStringPatch(raw map[string]json.RawMessage, key string) domain.PatchField[string] {
 	value, ok := raw[key]
 	if !ok {
-		return sdk.PatchField[string]{}
+		return domain.PatchField[string]{}
 	}
 	if isJSONNull(value) {
-		return sdk.ClearPatch[string]()
+		return domain.ClearPatch[string]()
 	}
 	var decoded string
 	if err := json.Unmarshal(value, &decoded); err != nil {
-		return sdk.PatchField[string]{}
+		return domain.PatchField[string]{}
 	}
-	return sdk.SetPatch(decoded)
+	return domain.SetPatch(decoded)
 }
 
-func jsonTimePatch(raw map[string]json.RawMessage, key string) sdk.PatchField[time.Time] {
+func jsonTimePatch(raw map[string]json.RawMessage, key string) domain.PatchField[time.Time] {
 	value, ok := raw[key]
 	if !ok {
-		return sdk.PatchField[time.Time]{}
+		return domain.PatchField[time.Time]{}
 	}
 	if isJSONNull(value) {
-		return sdk.ClearPatch[time.Time]()
+		return domain.ClearPatch[time.Time]()
 	}
 	var decoded string
 	if err := json.Unmarshal(value, &decoded); err != nil {
-		return sdk.PatchField[time.Time]{}
+		return domain.PatchField[time.Time]{}
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(decoded))
 	if err != nil {
-		return sdk.PatchField[time.Time]{}
+		return domain.PatchField[time.Time]{}
 	}
-	return sdk.SetPatch(parsed)
+	return domain.SetPatch(parsed)
 }
 
-func jsonRecurrencePatch(raw map[string]json.RawMessage, key string) sdk.PatchField[sdk.RecurrenceRule] {
+func jsonRecurrencePatch(raw map[string]json.RawMessage, key string) domain.PatchField[domain.RecurrenceRule] {
 	value, ok := raw[key]
 	if !ok {
-		return sdk.PatchField[sdk.RecurrenceRule]{}
+		return domain.PatchField[domain.RecurrenceRule]{}
 	}
 	if isJSONNull(value) {
-		return sdk.ClearPatch[sdk.RecurrenceRule]()
+		return domain.ClearPatch[domain.RecurrenceRule]()
 	}
 	var request RecurrenceRuleRequest
 	if err := json.Unmarshal(value, &request); err != nil {
-		return sdk.PatchField[sdk.RecurrenceRule]{}
+		return domain.PatchField[domain.RecurrenceRule]{}
 	}
 	rule, rejection := normalizeRecurrence(&request, false)
 	if rejection != "" || rule == nil {
-		return sdk.PatchField[sdk.RecurrenceRule]{}
+		return domain.PatchField[domain.RecurrenceRule]{}
 	}
-	return sdk.SetPatch(*rule)
+	return domain.SetPatch(*rule)
 }
 
 func isJSONNull(value json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 }
 
-func RunPlanningTask(ctx context.Context, options sdk.Options, request PlanningTaskRequest) (PlanningTaskResult, error) {
+func RunPlanningTask(ctx context.Context, options Options, request PlanningTaskRequest) (PlanningTaskResult, error) {
 	normalized, rejection := normalizePlanningTaskRequest(request)
 	if rejection != "" {
 		return rejectedResult(rejection), nil
@@ -322,7 +322,7 @@ func RunPlanningTask(ctx context.Context, options sdk.Options, request PlanningT
 		return PlanningTaskResult{Summary: "valid"}, nil
 	}
 
-	api, err := sdk.OpenLocal(options)
+	api, err := openLocal(options)
 	if err != nil {
 		return PlanningTaskResult{}, err
 	}
@@ -340,7 +340,7 @@ func RunPlanningTask(ctx context.Context, options sdk.Options, request PlanningT
 	return result, nil
 }
 
-func runPlanningTask(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	switch request.Action {
 	case PlanningTaskActionEnsureCalendar:
 		return runEnsureCalendar(ctx, api, request)
@@ -367,7 +367,7 @@ func runPlanningTask(ctx context.Context, api *sdk.Client, request normalizedPla
 	}
 }
 
-func runEnsureCalendar(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runEnsureCalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	written, err := api.EnsureCalendar(ctx, request.CalendarInput)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -385,7 +385,7 @@ func runEnsureCalendar(ctx context.Context, api *sdk.Client, request normalizedP
 	}, nil
 }
 
-func runCreateEvent(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runCreateEvent(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	calendar, calendarWrite, err := resolveWriteCalendar(ctx, api, request)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -414,7 +414,7 @@ func runCreateEvent(ctx context.Context, api *sdk.Client, request normalizedPlan
 	return result, nil
 }
 
-func runCreateTask(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runCreateTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	calendar, calendarWrite, err := resolveWriteCalendar(ctx, api, request)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -443,7 +443,7 @@ func runCreateTask(ctx context.Context, api *sdk.Client, request normalizedPlann
 	return result, nil
 }
 
-func runUpdateCalendar(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runUpdateCalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	calendarID := request.CalendarID
 	if calendarID == "" {
 		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
@@ -471,7 +471,7 @@ func runUpdateCalendar(ctx context.Context, api *sdk.Client, request normalizedP
 	}, nil
 }
 
-func runUpdateEvent(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runUpdateEvent(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	updated, err := api.UpdateEvent(ctx, request.EventID, request.EventPatch)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -488,7 +488,7 @@ func runUpdateEvent(ctx context.Context, api *sdk.Client, request normalizedPlan
 	}, nil
 }
 
-func runUpdateTask(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runUpdateTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	updated, err := api.UpdateTask(ctx, request.TaskID, request.TaskPatch)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -505,7 +505,7 @@ func runUpdateTask(ctx context.Context, api *sdk.Client, request normalizedPlann
 	}, nil
 }
 
-func runListAgenda(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runListAgenda(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	page, err := api.ListAgenda(ctx, request.AgendaOptions)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -520,7 +520,7 @@ func runListAgenda(ctx context.Context, api *sdk.Client, request normalizedPlann
 	return result, nil
 }
 
-func runListEvents(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runListEvents(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	options := request.ListOptions
 	if request.CalendarName != "" {
 		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
@@ -546,7 +546,7 @@ func runListEvents(ctx context.Context, api *sdk.Client, request normalizedPlann
 	return result, nil
 }
 
-func runListTasks(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runListTasks(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	options := request.ListOptions
 	if request.CalendarName != "" {
 		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
@@ -572,7 +572,7 @@ func runListTasks(ctx context.Context, api *sdk.Client, request normalizedPlanni
 	return result, nil
 }
 
-func runCompleteTask(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+func runCompleteTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	completion, err := api.CompleteTask(ctx, request.TaskID, request.Completion)
 	if err != nil {
 		return PlanningTaskResult{}, err
@@ -587,20 +587,20 @@ func runCompleteTask(ctx context.Context, api *sdk.Client, request normalizedPla
 	}, nil
 }
 
-func resolveWriteCalendar(ctx context.Context, api *sdk.Client, request normalizedPlanningTaskRequest) (sdk.Calendar, *PlanningWrite, error) {
+func resolveWriteCalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (domain.Calendar, *PlanningWrite, error) {
 	if request.CalendarName == "" {
 		calendar, found, err := findCalendarByID(ctx, api, request.CalendarID)
 		if err != nil {
-			return sdk.Calendar{}, nil, err
+			return domain.Calendar{}, nil, err
 		}
 		if !found {
-			return sdk.Calendar{}, nil, &internalservice.NotFoundError{Resource: "calendar", ID: request.CalendarID, Message: "calendar not found"}
+			return domain.Calendar{}, nil, &internalservice.NotFoundError{Resource: "calendar", ID: request.CalendarID, Message: "calendar not found"}
 		}
 		return calendar, nil, nil
 	}
-	written, err := api.EnsureCalendar(ctx, sdk.CalendarInput{Name: request.CalendarName})
+	written, err := api.EnsureCalendar(ctx, domain.Calendar{Name: request.CalendarName})
 	if err != nil {
-		return sdk.Calendar{}, nil, err
+		return domain.Calendar{}, nil, err
 	}
 	write := PlanningWrite{
 		Kind:   "calendar",
@@ -623,7 +623,7 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 	}
 	normalized := normalizedPlanningTaskRequest{
 		Action: action,
-		ListOptions: sdk.ListOptions{
+		ListOptions: domain.PageParams{
 			Cursor: strings.TrimSpace(request.Cursor),
 			Limit:  limit,
 		},
@@ -710,7 +710,7 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		if !to.After(from) {
 			return normalizedPlanningTaskRequest{}, "to must be after from"
 		}
-		normalized.AgendaOptions = sdk.AgendaOptions{
+		normalized.AgendaOptions = domain.AgendaParams{
 			From:   from,
 			To:     to,
 			Cursor: strings.TrimSpace(request.Cursor),
@@ -742,18 +742,18 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 	}
 }
 
-func normalizeCalendarInput(request PlanningTaskRequest) (sdk.CalendarInput, string) {
+func normalizeCalendarInput(request PlanningTaskRequest) (domain.Calendar, string) {
 	name := calendarName(request)
 	if name == "" {
-		return sdk.CalendarInput{}, "calendar_name is required"
+		return domain.Calendar{}, "calendar_name is required"
 	}
 	if request.Color != nil {
 		color := strings.TrimSpace(*request.Color)
 		if color != "" && !colorPattern.MatchString(color) {
-			return sdk.CalendarInput{}, "color must be a #RRGGBB hex string"
+			return domain.Calendar{}, "color must be a #RRGGBB hex string"
 		}
 	}
-	return sdk.CalendarInput{
+	return domain.Calendar{
 		Name:        name,
 		Description: request.Description,
 		Color:       request.Color,
@@ -765,42 +765,42 @@ type calendarIdentifier struct {
 	CalendarID   string
 }
 
-func normalizeCalendarPatchInput(request PlanningTaskRequest) (calendarIdentifier, sdk.CalendarPatchInput, string) {
+func normalizeCalendarPatchInput(request PlanningTaskRequest) (calendarIdentifier, domain.CalendarPatch, string) {
 	name := strings.TrimSpace(request.CalendarName)
 	id := strings.TrimSpace(request.CalendarID)
 	if name == "" && id == "" {
-		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "calendar_name or calendar_id is required"
+		return calendarIdentifier{}, domain.CalendarPatch{}, "calendar_name or calendar_id is required"
 	}
 	if name != "" && id != "" {
-		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "use calendar_name or calendar_id, not both"
+		return calendarIdentifier{}, domain.CalendarPatch{}, "use calendar_name or calendar_id, not both"
 	}
 	if id != "" {
 		if _, err := ulid.ParseStrict(id); err != nil {
-			return calendarIdentifier{}, sdk.CalendarPatchInput{}, "calendar_id must be a valid ULID"
+			return calendarIdentifier{}, domain.CalendarPatch{}, "calendar_id must be a valid ULID"
 		}
 	}
 
 	patch := request.CalendarPatch
-	if !patch.Name.IsSet() && strings.TrimSpace(request.Name) != "" {
-		patch.Name = sdk.SetPatch(request.Name)
+	if !patch.Name.Present && strings.TrimSpace(request.Name) != "" {
+		patch.Name = domain.SetPatch(request.Name)
 	}
-	if !patch.Description.IsSet() && request.Description != nil {
-		patch.Description = sdk.SetPatch(*request.Description)
+	if !patch.Description.Present && request.Description != nil {
+		patch.Description = domain.SetPatch(*request.Description)
 	}
-	if !patch.Color.IsSet() && request.Color != nil {
-		patch.Color = sdk.SetPatch(*request.Color)
+	if !patch.Color.Present && request.Color != nil {
+		patch.Color = domain.SetPatch(*request.Color)
 	}
-	if patch.Name.IsClear() {
-		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "name cannot be cleared"
+	if patch.Name.Clear {
+		return calendarIdentifier{}, domain.CalendarPatch{}, "name cannot be cleared"
 	}
-	if patch.Color.IsSet() && !patch.Color.IsClear() {
-		color := strings.TrimSpace(patch.Color.Value())
+	if patch.Color.Present && !patch.Color.Clear {
+		color := strings.TrimSpace(patch.Color.Value)
 		if color != "" && !colorPattern.MatchString(color) {
-			return calendarIdentifier{}, sdk.CalendarPatchInput{}, "color must be a #RRGGBB hex string"
+			return calendarIdentifier{}, domain.CalendarPatch{}, "color must be a #RRGGBB hex string"
 		}
 	}
 	if !calendarPatchHasUpdate(patch) {
-		return calendarIdentifier{}, sdk.CalendarPatchInput{}, "at least one update field is required"
+		return calendarIdentifier{}, domain.CalendarPatch{}, "at least one update field is required"
 	}
 	return calendarIdentifier{CalendarName: name, CalendarID: id}, patch, ""
 }
@@ -826,114 +826,114 @@ func normalizeCalendarRef(request PlanningTaskRequest, normalized *normalizedPla
 	return ""
 }
 
-func normalizeEventPatchInput(request PlanningTaskRequest) (sdk.EventPatchInput, string) {
+func normalizeEventPatchInput(request PlanningTaskRequest) (domain.EventPatch, string) {
 	patch := request.EventPatch
-	if !patch.Title.IsSet() && strings.TrimSpace(request.Title) != "" {
-		patch.Title = sdk.SetPatch(request.Title)
+	if !patch.Title.Present && strings.TrimSpace(request.Title) != "" {
+		patch.Title = domain.SetPatch(request.Title)
 	}
-	if !patch.Description.IsSet() && request.Description != nil {
-		patch.Description = sdk.SetPatch(*request.Description)
+	if !patch.Description.Present && request.Description != nil {
+		patch.Description = domain.SetPatch(*request.Description)
 	}
-	if !patch.Location.IsSet() && request.Location != nil {
-		patch.Location = sdk.SetPatch(*request.Location)
+	if !patch.Location.Present && request.Location != nil {
+		patch.Location = domain.SetPatch(*request.Location)
 	}
-	if !patch.StartAt.IsSet() && strings.TrimSpace(request.StartAt) != "" {
+	if !patch.StartAt.Present && strings.TrimSpace(request.StartAt) != "" {
 		startAt, rejection := parseRequiredTime("start_at", request.StartAt)
 		if rejection != "" {
-			return sdk.EventPatchInput{}, rejection
+			return domain.EventPatch{}, rejection
 		}
-		patch.StartAt = sdk.SetPatch(startAt)
+		patch.StartAt = domain.SetPatch(startAt)
 	}
-	if !patch.EndAt.IsSet() && strings.TrimSpace(request.EndAt) != "" {
+	if !patch.EndAt.Present && strings.TrimSpace(request.EndAt) != "" {
 		endAt, rejection := parseRequiredTime("end_at", request.EndAt)
 		if rejection != "" {
-			return sdk.EventPatchInput{}, rejection
+			return domain.EventPatch{}, rejection
 		}
-		patch.EndAt = sdk.SetPatch(endAt)
+		patch.EndAt = domain.SetPatch(endAt)
 	}
-	if !patch.StartDate.IsSet() && strings.TrimSpace(request.StartDate) != "" {
+	if !patch.StartDate.Present && strings.TrimSpace(request.StartDate) != "" {
 		startDate, rejection := parseRequiredDate("start_date", request.StartDate)
 		if rejection != "" {
-			return sdk.EventPatchInput{}, rejection
+			return domain.EventPatch{}, rejection
 		}
-		patch.StartDate = sdk.SetPatch(startDate)
+		patch.StartDate = domain.SetPatch(startDate)
 	}
-	if !patch.EndDate.IsSet() && strings.TrimSpace(request.EndDate) != "" {
+	if !patch.EndDate.Present && strings.TrimSpace(request.EndDate) != "" {
 		endDate, rejection := parseRequiredDate("end_date", request.EndDate)
 		if rejection != "" {
-			return sdk.EventPatchInput{}, rejection
+			return domain.EventPatch{}, rejection
 		}
-		patch.EndDate = sdk.SetPatch(endDate)
+		patch.EndDate = domain.SetPatch(endDate)
 	}
 	startDate, rejection := normalizeDatePatch("start_date", patch.StartDate)
 	if rejection != "" {
-		return sdk.EventPatchInput{}, rejection
+		return domain.EventPatch{}, rejection
 	}
 	patch.StartDate = startDate
 	endDate, rejection := normalizeDatePatch("end_date", patch.EndDate)
 	if rejection != "" {
-		return sdk.EventPatchInput{}, rejection
+		return domain.EventPatch{}, rejection
 	}
 	patch.EndDate = endDate
-	if !patch.Recurrence.IsSet() && request.Recurrence != nil {
+	if !patch.Recurrence.Present && request.Recurrence != nil {
 		recurrence, rejection := normalizeRecurrence(request.Recurrence, false)
 		if rejection != "" {
-			return sdk.EventPatchInput{}, rejection
+			return domain.EventPatch{}, rejection
 		}
 		if recurrence != nil {
-			patch.Recurrence = sdk.SetPatch(*recurrence)
+			patch.Recurrence = domain.SetPatch(*recurrence)
 		}
 	}
-	if patch.Title.IsClear() {
-		return sdk.EventPatchInput{}, "title cannot be cleared"
+	if patch.Title.Clear {
+		return domain.EventPatch{}, "title cannot be cleared"
 	}
 	if !eventPatchHasUpdate(patch) {
-		return sdk.EventPatchInput{}, "at least one update field is required"
+		return domain.EventPatch{}, "at least one update field is required"
 	}
 	return patch, ""
 }
 
-func normalizeTaskPatchInput(request PlanningTaskRequest) (sdk.TaskPatchInput, string) {
+func normalizeTaskPatchInput(request PlanningTaskRequest) (domain.TaskPatch, string) {
 	patch := request.TaskPatch
-	if !patch.Title.IsSet() && strings.TrimSpace(request.Title) != "" {
-		patch.Title = sdk.SetPatch(request.Title)
+	if !patch.Title.Present && strings.TrimSpace(request.Title) != "" {
+		patch.Title = domain.SetPatch(request.Title)
 	}
-	if !patch.Description.IsSet() && request.Description != nil {
-		patch.Description = sdk.SetPatch(*request.Description)
+	if !patch.Description.Present && request.Description != nil {
+		patch.Description = domain.SetPatch(*request.Description)
 	}
-	if !patch.DueAt.IsSet() && strings.TrimSpace(request.DueAt) != "" {
+	if !patch.DueAt.Present && strings.TrimSpace(request.DueAt) != "" {
 		dueAt, rejection := parseRequiredTime("due_at", request.DueAt)
 		if rejection != "" {
-			return sdk.TaskPatchInput{}, rejection
+			return domain.TaskPatch{}, rejection
 		}
-		patch.DueAt = sdk.SetPatch(dueAt)
+		patch.DueAt = domain.SetPatch(dueAt)
 	}
-	if !patch.DueDate.IsSet() && strings.TrimSpace(request.DueDate) != "" {
+	if !patch.DueDate.Present && strings.TrimSpace(request.DueDate) != "" {
 		dueDate, rejection := parseRequiredDate("due_date", request.DueDate)
 		if rejection != "" {
-			return sdk.TaskPatchInput{}, rejection
+			return domain.TaskPatch{}, rejection
 		}
-		patch.DueDate = sdk.SetPatch(dueDate)
+		patch.DueDate = domain.SetPatch(dueDate)
 	}
 	dueDate, rejection := normalizeDatePatch("due_date", patch.DueDate)
 	if rejection != "" {
-		return sdk.TaskPatchInput{}, rejection
+		return domain.TaskPatch{}, rejection
 	}
 	patch.DueDate = dueDate
-	if !patch.Recurrence.IsSet() && request.Recurrence != nil {
+	if !patch.Recurrence.Present && request.Recurrence != nil {
 		recurrence, rejection := normalizeRecurrence(request.Recurrence, false)
 		if rejection != "" {
-			return sdk.TaskPatchInput{}, rejection
+			return domain.TaskPatch{}, rejection
 		}
 		if recurrence != nil {
-			patch.Recurrence = sdk.SetPatch(*recurrence)
+			patch.Recurrence = domain.SetPatch(*recurrence)
 		}
 	}
-	if patch.Title.IsClear() {
-		return sdk.TaskPatchInput{}, "title cannot be cleared"
+	if patch.Title.Clear {
+		return domain.TaskPatch{}, "title cannot be cleared"
 	}
 	if !taskPatchHasUpdate(patch) {
-		return sdk.TaskPatchInput{}, "at least one update field is required"
+		return domain.TaskPatch{}, "at least one update field is required"
 	}
 	return patch, ""
 }
@@ -957,53 +957,53 @@ func normalizeOptionalCalendarFilter(request PlanningTaskRequest, normalized *no
 	return ""
 }
 
-func normalizeEventInput(request PlanningTaskRequest) (sdk.EventInput, string) {
+func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 	title := strings.TrimSpace(request.Title)
 	if title == "" {
-		return sdk.EventInput{}, "title is required"
+		return domain.Event{}, "title is required"
 	}
 	startAt, rejection := parseOptionalTime("start_at", request.StartAt)
 	if rejection != "" {
-		return sdk.EventInput{}, rejection
+		return domain.Event{}, rejection
 	}
 	endAt, rejection := parseOptionalTime("end_at", request.EndAt)
 	if rejection != "" {
-		return sdk.EventInput{}, rejection
+		return domain.Event{}, rejection
 	}
 	startDate, rejection := parseOptionalDate("start_date", request.StartDate)
 	if rejection != "" {
-		return sdk.EventInput{}, rejection
+		return domain.Event{}, rejection
 	}
 	endDate, rejection := parseOptionalDate("end_date", request.EndDate)
 	if rejection != "" {
-		return sdk.EventInput{}, rejection
+		return domain.Event{}, rejection
 	}
 
 	timed := startAt != nil || endAt != nil
 	dated := startDate != nil || endDate != nil
 	if timed && dated {
-		return sdk.EventInput{}, "use either timed or all-day fields, not both"
+		return domain.Event{}, "use either timed or all-day fields, not both"
 	}
 	if !timed && !dated {
-		return sdk.EventInput{}, "start_at or start_date is required"
+		return domain.Event{}, "start_at or start_date is required"
 	}
 	if endAt != nil && startAt == nil {
-		return sdk.EventInput{}, "start_at is required when end_at is provided"
+		return domain.Event{}, "start_at is required when end_at is provided"
 	}
 	if startAt != nil && endAt != nil && !endAt.After(*startAt) {
-		return sdk.EventInput{}, "end_at must be after start_at"
+		return domain.Event{}, "end_at must be after start_at"
 	}
 	if endDate != nil && startDate == nil {
-		return sdk.EventInput{}, "start_date is required when end_date is provided"
+		return domain.Event{}, "start_date is required when end_date is provided"
 	}
 	if startDate != nil && endDate != nil && *endDate < *startDate {
-		return sdk.EventInput{}, "end_date must not be before start_date"
+		return domain.Event{}, "end_date must not be before start_date"
 	}
 	recurrence, rejection := normalizeRecurrence(request.Recurrence, timed)
 	if rejection != "" {
-		return sdk.EventInput{}, rejection
+		return domain.Event{}, rejection
 	}
-	return sdk.EventInput{
+	return domain.Event{
 		Title:       title,
 		Description: request.Description,
 		Location:    request.Location,
@@ -1015,30 +1015,30 @@ func normalizeEventInput(request PlanningTaskRequest) (sdk.EventInput, string) {
 	}, ""
 }
 
-func normalizeTaskInput(request PlanningTaskRequest) (sdk.TaskInput, string) {
+func normalizeTaskInput(request PlanningTaskRequest) (domain.Task, string) {
 	title := strings.TrimSpace(request.Title)
 	if title == "" {
-		return sdk.TaskInput{}, "title is required"
+		return domain.Task{}, "title is required"
 	}
 	dueAt, rejection := parseOptionalTime("due_at", request.DueAt)
 	if rejection != "" {
-		return sdk.TaskInput{}, rejection
+		return domain.Task{}, rejection
 	}
 	dueDate, rejection := parseOptionalDate("due_date", request.DueDate)
 	if rejection != "" {
-		return sdk.TaskInput{}, rejection
+		return domain.Task{}, rejection
 	}
 	if dueAt != nil && dueDate != nil {
-		return sdk.TaskInput{}, "use either due_at or due_date, not both"
+		return domain.Task{}, "use either due_at or due_date, not both"
 	}
 	recurrence, rejection := normalizeRecurrence(request.Recurrence, dueAt != nil)
 	if rejection != "" {
-		return sdk.TaskInput{}, rejection
+		return domain.Task{}, rejection
 	}
 	if recurrence != nil && dueAt == nil && dueDate == nil {
-		return sdk.TaskInput{}, "recurring tasks require due_at or due_date"
+		return domain.Task{}, "recurring tasks require due_at or due_date"
 	}
-	return sdk.TaskInput{
+	return domain.Task{
 		Title:       title,
 		Description: request.Description,
 		DueAt:       dueAt,
@@ -1047,34 +1047,34 @@ func normalizeTaskInput(request PlanningTaskRequest) (sdk.TaskInput, string) {
 	}, ""
 }
 
-func normalizeCompletionInput(request PlanningTaskRequest) (sdk.TaskCompletionInput, string) {
+func normalizeCompletionInput(request PlanningTaskRequest) (domain.TaskCompletionRequest, string) {
 	occurrenceAt, rejection := parseOptionalTime("occurrence_at", request.OccurrenceAt)
 	if rejection != "" {
-		return sdk.TaskCompletionInput{}, rejection
+		return domain.TaskCompletionRequest{}, rejection
 	}
 	occurrenceDate, rejection := parseOptionalDate("occurrence_date", request.OccurrenceDate)
 	if rejection != "" {
-		return sdk.TaskCompletionInput{}, rejection
+		return domain.TaskCompletionRequest{}, rejection
 	}
 	if occurrenceAt != nil && occurrenceDate != nil {
-		return sdk.TaskCompletionInput{}, "use occurrence_at or occurrence_date, not both"
+		return domain.TaskCompletionRequest{}, "use occurrence_at or occurrence_date, not both"
 	}
-	return sdk.TaskCompletionInput{OccurrenceAt: occurrenceAt, OccurrenceDate: occurrenceDate}, ""
+	return domain.TaskCompletionRequest{OccurrenceAt: occurrenceAt, OccurrenceDate: occurrenceDate}, ""
 }
 
-func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*sdk.RecurrenceRule, string) {
+func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*domain.RecurrenceRule, string) {
 	if input == nil {
 		return nil, ""
 	}
 	frequency := strings.TrimSpace(input.Frequency)
 	switch frequency {
-	case string(sdk.RecurrenceFrequencyDaily), string(sdk.RecurrenceFrequencyWeekly), string(sdk.RecurrenceFrequencyMonthly):
+	case string(domain.RecurrenceFrequencyDaily), string(domain.RecurrenceFrequencyWeekly), string(domain.RecurrenceFrequencyMonthly):
 	case "":
 		return nil, "recurrence.frequency is required"
 	default:
 		return nil, "unsupported recurrence frequency"
 	}
-	rule := sdk.RecurrenceRule{Frequency: sdk.RecurrenceFrequency(frequency)}
+	rule := domain.RecurrenceRule{Frequency: domain.RecurrenceFrequency(frequency)}
 	if input.Interval != nil {
 		if *input.Interval <= 0 {
 			return nil, "recurrence.interval must be greater than 0"
@@ -1105,7 +1105,7 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*sdk.Recurre
 		return nil, "use recurrence.until_at or recurrence.until_date, not both"
 	}
 	if len(input.ByWeekday) > 0 {
-		if rule.Frequency != sdk.RecurrenceFrequencyWeekly {
+		if rule.Frequency != domain.RecurrenceFrequencyWeekly {
 			return nil, "recurrence.by_weekday is only supported for weekly recurrence"
 		}
 		weekdays, rejection := normalizeWeekdays(input.ByWeekday)
@@ -1115,7 +1115,7 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*sdk.Recurre
 		rule.ByWeekday = weekdays
 	}
 	if len(input.ByMonthDay) > 0 {
-		if rule.Frequency != sdk.RecurrenceFrequencyMonthly {
+		if rule.Frequency != domain.RecurrenceFrequencyMonthly {
 			return nil, "recurrence.by_month_day is only supported for monthly recurrence"
 		}
 		for _, day := range input.ByMonthDay {
@@ -1129,12 +1129,12 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*sdk.Recurre
 	return &rule, ""
 }
 
-func normalizeWeekdays(values []string) ([]sdk.Weekday, string) {
-	out := make([]sdk.Weekday, 0, len(values))
+func normalizeWeekdays(values []string) ([]domain.Weekday, string) {
+	out := make([]domain.Weekday, 0, len(values))
 	for _, value := range values {
-		switch sdk.Weekday(strings.TrimSpace(value)) {
-		case sdk.WeekdayMonday, sdk.WeekdayTuesday, sdk.WeekdayWednesday, sdk.WeekdayThursday, sdk.WeekdayFriday, sdk.WeekdaySaturday, sdk.WeekdaySunday:
-			out = append(out, sdk.Weekday(strings.TrimSpace(value)))
+		switch domain.Weekday(strings.TrimSpace(value)) {
+		case domain.WeekdayMonday, domain.WeekdayTuesday, domain.WeekdayWednesday, domain.WeekdayThursday, domain.WeekdayFriday, domain.WeekdaySaturday, domain.WeekdaySunday:
+			out = append(out, domain.Weekday(strings.TrimSpace(value)))
 		default:
 			return nil, "recurrence.by_weekday values must be MO, TU, WE, TH, FR, SA, or SU"
 		}
@@ -1185,15 +1185,15 @@ func parseRequiredDate(field string, value string) (string, string) {
 	return *parsed, ""
 }
 
-func normalizeDatePatch(field string, patch sdk.PatchField[string]) (sdk.PatchField[string], string) {
-	if !patch.IsSet() || patch.IsClear() {
+func normalizeDatePatch(field string, patch domain.PatchField[string]) (domain.PatchField[string], string) {
+	if !patch.Present || patch.Clear {
 		return patch, ""
 	}
-	value, rejection := parseRequiredDate(field, patch.Value())
+	value, rejection := parseRequiredDate(field, patch.Value)
 	if rejection != "" {
-		return sdk.PatchField[string]{}, rejection
+		return domain.PatchField[string]{}, rejection
 	}
-	return sdk.SetPatch(value), ""
+	return domain.SetPatch(value), ""
 }
 
 func parseOptionalTime(field string, value string) (*time.Time, string) {
@@ -1208,27 +1208,27 @@ func parseOptionalTime(field string, value string) (*time.Time, string) {
 	return &parsed, ""
 }
 
-func calendarPatchHasUpdate(patch sdk.CalendarPatchInput) bool {
-	return patch.Name.IsSet() || patch.Description.IsSet() || patch.Color.IsSet()
+func calendarPatchHasUpdate(patch domain.CalendarPatch) bool {
+	return patch.Name.Present || patch.Description.Present || patch.Color.Present
 }
 
-func eventPatchHasUpdate(patch sdk.EventPatchInput) bool {
-	return patch.Title.IsSet() ||
-		patch.Description.IsSet() ||
-		patch.Location.IsSet() ||
-		patch.StartAt.IsSet() ||
-		patch.EndAt.IsSet() ||
-		patch.StartDate.IsSet() ||
-		patch.EndDate.IsSet() ||
-		patch.Recurrence.IsSet()
+func eventPatchHasUpdate(patch domain.EventPatch) bool {
+	return patch.Title.Present ||
+		patch.Description.Present ||
+		patch.Location.Present ||
+		patch.StartAt.Present ||
+		patch.EndAt.Present ||
+		patch.StartDate.Present ||
+		patch.EndDate.Present ||
+		patch.Recurrence.Present
 }
 
-func taskPatchHasUpdate(patch sdk.TaskPatchInput) bool {
-	return patch.Title.IsSet() ||
-		patch.Description.IsSet() ||
-		patch.DueAt.IsSet() ||
-		patch.DueDate.IsSet() ||
-		patch.Recurrence.IsSet()
+func taskPatchHasUpdate(patch domain.TaskPatch) bool {
+	return patch.Title.Present ||
+		patch.Description.Present ||
+		patch.DueAt.Present ||
+		patch.DueDate.Present ||
+		patch.Recurrence.Present
 }
 
 func parseRequiredTime(field string, value string) (time.Time, string) {
@@ -1242,12 +1242,12 @@ func parseRequiredTime(field string, value string) (time.Time, string) {
 	return *parsed, ""
 }
 
-func findCalendarByName(ctx context.Context, api *sdk.Client, name string) (sdk.Calendar, bool, error) {
+func findCalendarByName(ctx context.Context, api *localRuntime, name string) (domain.Calendar, bool, error) {
 	cursor := ""
 	for {
-		page, err := api.ListCalendars(ctx, sdk.ListOptions{Cursor: cursor, Limit: 200})
+		page, err := api.ListCalendars(ctx, domain.PageParams{Cursor: cursor, Limit: 200})
 		if err != nil {
-			return sdk.Calendar{}, false, err
+			return domain.Calendar{}, false, err
 		}
 		for _, calendar := range page.Items {
 			if calendar.Name == name {
@@ -1255,18 +1255,18 @@ func findCalendarByName(ctx context.Context, api *sdk.Client, name string) (sdk.
 			}
 		}
 		if page.NextCursor == nil {
-			return sdk.Calendar{}, false, nil
+			return domain.Calendar{}, false, nil
 		}
 		cursor = *page.NextCursor
 	}
 }
 
-func findCalendarByID(ctx context.Context, api *sdk.Client, id string) (sdk.Calendar, bool, error) {
+func findCalendarByID(ctx context.Context, api *localRuntime, id string) (domain.Calendar, bool, error) {
 	cursor := ""
 	for {
-		page, err := api.ListCalendars(ctx, sdk.ListOptions{Cursor: cursor, Limit: 200})
+		page, err := api.ListCalendars(ctx, domain.PageParams{Cursor: cursor, Limit: 200})
 		if err != nil {
-			return sdk.Calendar{}, false, err
+			return domain.Calendar{}, false, err
 		}
 		for _, calendar := range page.Items {
 			if calendar.ID == id {
@@ -1274,7 +1274,7 @@ func findCalendarByID(ctx context.Context, api *sdk.Client, id string) (sdk.Cale
 			}
 		}
 		if page.NextCursor == nil {
-			return sdk.Calendar{}, false, nil
+			return domain.Calendar{}, false, nil
 		}
 		cursor = *page.NextCursor
 	}
@@ -1304,7 +1304,7 @@ func rejectedResult(reason string) PlanningTaskResult {
 	}
 }
 
-func calendarEntry(calendar sdk.Calendar) CalendarEntry {
+func calendarEntry(calendar domain.Calendar) CalendarEntry {
 	return CalendarEntry{
 		ID:          calendar.ID,
 		Name:        calendar.Name,
@@ -1313,7 +1313,7 @@ func calendarEntry(calendar sdk.Calendar) CalendarEntry {
 	}
 }
 
-func eventEntries(events []sdk.Event) []EventEntry {
+func eventEntries(events []domain.Event) []EventEntry {
 	out := make([]EventEntry, 0, len(events))
 	for _, event := range events {
 		out = append(out, eventEntry(event))
@@ -1321,7 +1321,7 @@ func eventEntries(events []sdk.Event) []EventEntry {
 	return out
 }
 
-func eventEntry(event sdk.Event) EventEntry {
+func eventEntry(event domain.Event) EventEntry {
 	out := EventEntry{
 		ID:          event.ID,
 		CalendarID:  event.CalendarID,
@@ -1341,7 +1341,7 @@ func eventEntry(event sdk.Event) EventEntry {
 	return out
 }
 
-func taskEntries(tasks []sdk.Task) []TaskEntry {
+func taskEntries(tasks []domain.Task) []TaskEntry {
 	out := make([]TaskEntry, 0, len(tasks))
 	for _, task := range tasks {
 		out = append(out, taskEntry(task))
@@ -1349,7 +1349,7 @@ func taskEntries(tasks []sdk.Task) []TaskEntry {
 	return out
 }
 
-func taskEntry(task sdk.Task) TaskEntry {
+func taskEntry(task domain.Task) TaskEntry {
 	out := TaskEntry{
 		ID:          task.ID,
 		CalendarID:  task.CalendarID,
@@ -1367,7 +1367,7 @@ func taskEntry(task sdk.Task) TaskEntry {
 	return out
 }
 
-func agendaEntries(items []sdk.AgendaItem) []AgendaEntry {
+func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 	out := make([]AgendaEntry, 0, len(items))
 	for _, item := range items {
 		entry := AgendaEntry{
@@ -1398,7 +1398,7 @@ func agendaEntries(items []sdk.AgendaItem) []AgendaEntry {
 	return out
 }
 
-func recurrenceResult(rule *sdk.RecurrenceRule) *RecurrenceRuleResult {
+func recurrenceResult(rule *domain.RecurrenceRule) *RecurrenceRuleResult {
 	if rule == nil {
 		return nil
 	}

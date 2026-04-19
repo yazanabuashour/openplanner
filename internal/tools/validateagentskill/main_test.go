@@ -30,7 +30,6 @@ func TestValidateSkillDirRejectsStaleGuidance(t *testing.T) {
 		"go run ./cmd/openplanner planning",
 		"openplanner-agentops",
 		"AgentOps",
-		"sdk/generated",
 		"OpenAPI",
 		".claude/skills/openplanner",
 	}

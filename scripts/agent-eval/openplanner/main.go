@@ -19,8 +19,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/yazanabuashour/openplanner/internal/domain"
 	"github.com/yazanabuashour/openplanner/internal/runner"
-	"github.com/yazanabuashour/openplanner/sdk"
+	internalservice "github.com/yazanabuashour/openplanner/internal/service"
+	"github.com/yazanabuashour/openplanner/internal/store"
 )
 
 const (
@@ -1085,23 +1087,24 @@ func verifyCalendar(dbPath string, name string, finalMessage string) (verificati
 	}, nil
 }
 
-func listCalendars(dbPath string) ([]sdk.Calendar, error) {
+func listCalendars(dbPath string) ([]domain.Calendar, error) {
 	if !fileExists(dbPath) {
 		return nil, nil
 	}
-	api, err := sdk.OpenLocal(sdk.Options{DatabasePath: dbPath})
+	repository, err := store.Open(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = api.Close() }()
-	page, err := api.ListCalendars(context.Background(), sdk.ListOptions{Limit: 100})
+	defer func() { _ = repository.Close() }()
+	service := internalservice.New(repository)
+	page, err := service.ListCalendars(domain.PageParams{Limit: 100})
 	if err != nil {
 		return nil, err
 	}
 	return page.Items, nil
 }
 
-func calendarNameExists(calendars []sdk.Calendar, name string) bool {
+func calendarNameExists(calendars []domain.Calendar, name string) bool {
 	for _, calendar := range calendars {
 		if calendar.Name == name {
 			return true
@@ -1214,7 +1217,7 @@ func verifyFinalAnswerOnlyRejection(dbPath string, finalMessage string, anyKeywo
 }
 
 func runPlanning(dbPath string, request runner.PlanningTaskRequest) (runner.PlanningTaskResult, error) {
-	return runner.RunPlanningTask(context.Background(), sdk.Options{DatabasePath: dbPath}, request)
+	return runner.RunPlanningTask(context.Background(), runner.Options{DatabasePath: dbPath}, request)
 }
 
 func eventExists(events []runner.EventEntry, want eventState) bool {
@@ -1876,8 +1879,7 @@ func isBroadRepoSearchCommand(command string) bool {
 
 func inspectsGeneratedFileCommand(command string, output string) bool {
 	lower := strings.ToLower(command + "\n" + output)
-	return strings.Contains(lower, "sdk/generated/") ||
-		strings.Contains(lower, "generated/api_") ||
+	return strings.Contains(lower, "generated/api_") ||
 		strings.Contains(lower, "generated/model_") ||
 		strings.Contains(lower, "openapi/openapi.yaml")
 }

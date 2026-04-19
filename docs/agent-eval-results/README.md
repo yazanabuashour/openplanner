@@ -7,7 +7,6 @@ Raw logs are not committed. Reduced reports should refer to raw logs with
 Current recommendation:
 
 - Use the installed `openplanner` JSON runner for routine local planning tasks.
-- Keep the direct local SDK as the Go developer surface.
 - Treat the portable `skills/openplanner` payload as the production skill
   contract.
 
