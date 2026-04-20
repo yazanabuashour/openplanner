@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -737,6 +738,9 @@ func runOne(repoRoot string, runRoot string, currentScenario scenario, cache cac
 	}
 	if err := timedPhase(&timings.InstallVariant, func() error { return installEvalRunnerAndSkill(runRepo, runDir) }); err != nil {
 		return runResult{}, fmt.Errorf("install eval runner and skill: %w", err)
+	}
+	if err := preflightEvalContext(repoRoot, runRepo, runDir, cache); err != nil {
+		return runResult{}, fmt.Errorf("preflight eval context: %w", err)
 	}
 	if cache.Mode == cacheModeIsolated {
 		if err := timedPhase(&timings.WarmCache, func() error { return warmGoModules(runRepo, runDir, dbPath, cache) }); err != nil {
@@ -2756,6 +2760,13 @@ func copyFile(src string, dst string, mode fs.FileMode) error {
 }
 
 func installEvalRunnerAndSkill(runRepo string, runDir string) error {
+	if err := buildEvalRunner(runRepo, runDir); err != nil {
+		return err
+	}
+	return installEvalSkill(runRepo)
+}
+
+func buildEvalRunner(runRepo string, runDir string) error {
 	binDir := filepath.Join(runDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
@@ -2767,7 +2778,10 @@ func installEvalRunnerAndSkill(runRepo string, runDir string) error {
 	if err != nil {
 		return fmt.Errorf("build openplanner runner: %w: %s", err, strings.TrimSpace(string(output)))
 	}
+	return nil
+}
 
+func installEvalSkill(runRepo string) error {
 	skillDir := filepath.Join(runRepo, ".agents", "skills", "openplanner")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return err
@@ -2776,11 +2790,71 @@ func installEvalRunnerAndSkill(runRepo string, runDir string) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(runRepo, "AGENTS.md"), []byte(evalBootstrapInstructions()), 0o644)
+	return nil
 }
 
-func evalBootstrapInstructions() string {
-	return "# OpenPlanner Eval Bootstrap\n\nThe production OpenPlanner skill is installed at `.agents/skills/openplanner/SKILL.md`. Use that skill for local OpenPlanner calendar and task requests.\n"
+func preflightEvalContext(repoRoot string, runRepo string, runDir string, cache cacheConfig) error {
+	sourceSkill := filepath.Join(repoRoot, "skills", "openplanner", "SKILL.md")
+	installedSkill := filepath.Join(runRepo, ".agents", "skills", "openplanner", "SKILL.md")
+	sourceBytes, err := os.ReadFile(sourceSkill)
+	if err != nil {
+		return err
+	}
+	installedBytes, err := os.ReadFile(installedSkill)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(sourceBytes, installedBytes) {
+		return errors.New("installed production skill does not match shipped SKILL.md")
+	}
+	if _, err := os.Stat(filepath.Join(runRepo, "AGENTS.md")); !os.IsNotExist(err) {
+		if err == nil {
+			return errors.New("production eval repo must not contain AGENTS.md")
+		}
+		return err
+	}
+
+	cmd := exec.Command("codex", "debug", "prompt-input", "Use OpenPlanner to list today's agenda.")
+	cmd.Dir = runRepo
+	cmd.Env = evalEnv(runDir, evalDatabasePath(runRepo), cache)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	rendered := string(output)
+	if !strings.Contains(rendered, "- openplanner:") {
+		return errors.New("rendered prompt is missing openplanner skill discovery")
+	}
+	if !strings.Contains(rendered, ".agents/skills/openplanner/SKILL.md") {
+		return errors.New("rendered prompt does not point openplanner to the installed project skill")
+	}
+	if containsOpenPlannerAgentsInstructions(rendered) {
+		return errors.New("rendered prompt contains OpenPlanner product instructions from AGENTS.md")
+	}
+	return nil
+}
+
+func containsOpenPlannerAgentsInstructions(rendered string) bool {
+	const marker = "# AGENTS.md instructions"
+	index := strings.Index(rendered, marker)
+	if index < 0 {
+		return false
+	}
+	agentsText := rendered[index:]
+	for _, forbidden := range []string{
+		"openplanner planning",
+		`"action"`,
+		"calendar_name",
+		"YYYY-MM-DD",
+		"RFC3339",
+		"ambiguous short date",
+		"product data agent",
+	} {
+		if strings.Contains(agentsText, forbidden) {
+			return true
+		}
+	}
+	return false
 }
 
 func warmGoModules(runRepo string, runDir string, dbPath string, cache cacheConfig) error {

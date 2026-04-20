@@ -10,7 +10,6 @@ func TestPublicGuidanceUsesJSONRunnerProductSurface(t *testing.T) {
 	t.Parallel()
 
 	files := []string{
-		"../../AGENTS.md",
 		"../../README.md",
 		"../../CONTRIBUTING.md",
 		"../../docs/agent-evals.md",
@@ -72,6 +71,9 @@ func TestProductSurfaceGuidanceIsPresent(t *testing.T) {
 		"../../docs/agent-evals.md": {
 			"OpenHealth AgentOps runner pattern",
 			"installed `openplanner planning` JSON runner",
+			"The production skill remains the only model-visible",
+			"does not generate an OpenPlanner-specific eval",
+			"`codex debug prompt-input`",
 			"CLI comparison gates",
 			"`n/a` unless a separate baseline is approved",
 		},
@@ -93,6 +95,62 @@ func TestProductSurfaceGuidanceIsPresent(t *testing.T) {
 			if !strings.Contains(text, phrase) {
 				t.Fatalf("%s missing product-surface guidance %q", file, phrase)
 			}
+		}
+	}
+}
+
+func TestMaintainerAgentsFileDoesNotCarryProductTaskPolicy(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile("../../AGENTS.md")
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	text := string(content)
+	for _, forbidden := range []string{
+		"OpenPlanner User Data Requests",
+		"openplanner planning",
+		`"action"`,
+		"calendar_name",
+		"product data agent",
+		"ambiguous short date",
+		"RFC3339",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("AGENTS.md contains product task policy %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"Beads Issue Tracker",
+		"Session Completion",
+		"Do work on the current branch",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("AGENTS.md missing maintainer guidance %q", required)
+		}
+	}
+}
+
+func TestOpenPlannerSkillCarriesProductTaskPolicy(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile("../../skills/openplanner/SKILL.md")
+	if err != nil {
+		t.Fatalf("read skill: %v", err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		"openplanner planning",
+		"calendar_name",
+		`"action":"create_event"`,
+		`"action":"delete_task"`,
+		"ambiguous short date",
+		"RFC3339",
+		"Do not write local OpenPlanner data through SQLite directly",
+		"Do not inspect\nsource files",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("SKILL.md missing product task policy %q", required)
 		}
 	}
 }

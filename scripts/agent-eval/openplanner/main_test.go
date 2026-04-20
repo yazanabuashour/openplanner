@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -136,6 +137,132 @@ func TestRunEvalJobsPreservesResultOrderingAndErrors(t *testing.T) {
 	}
 	if results[2].Passed || !strings.Contains(results[2].Verification.Details, "boom") {
 		t.Fatalf("harness error result = %#v", results[2])
+	}
+}
+
+func TestCopyRepoSkipsVariantContaminatingInstructions(t *testing.T) {
+	t.Parallel()
+
+	temp := t.TempDir()
+	src := filepath.Join(temp, "src")
+	dst := filepath.Join(temp, "dst")
+	for _, path := range []string{
+		filepath.Join(src, ".agents", "skills", "openplanner"),
+		filepath.Join(src, "docs", "agent-eval-results"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		filepath.Join(src, "AGENTS.md"):                                       "repo agent instructions",
+		filepath.Join(src, "README.md"):                                       "kept",
+		filepath.Join(src, ".agents", "skills", "openplanner", "SKILL.md"):    "stale skill",
+		filepath.Join(src, "docs", "agent-eval-results", "previous.md"):       "previous report",
+		filepath.Join(src, "docs", "agent-evals.md"):                          "eval docs",
+		filepath.Join(src, "scripts", "agent-eval", "openplanner", "main.go"): "harness",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := copyRepo(src, dst); err != nil {
+		t.Fatalf("copyRepo() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README.md")); err != nil {
+		t.Fatalf("kept file stat error = %v", err)
+	}
+	for _, skipped := range []string{
+		"AGENTS.md",
+		filepath.Join(".agents", "skills", "openplanner", "SKILL.md"),
+		filepath.Join("docs", "agent-eval-results", "previous.md"),
+		filepath.Join("docs", "agent-evals.md"),
+		filepath.Join("scripts", "agent-eval", "openplanner", "main.go"),
+	} {
+		if _, err := os.Stat(filepath.Join(dst, skipped)); !os.IsNotExist(err) {
+			t.Fatalf("copied skipped path %s: stat error = %v", skipped, err)
+		}
+	}
+}
+
+func TestInstallEvalSkillInstallsExactProductionSkillWithoutAgentsFile(t *testing.T) {
+	t.Parallel()
+
+	runRepo := filepath.Join(t.TempDir(), "repo")
+	sourceSkillDir := filepath.Join(runRepo, "skills", "openplanner")
+	if err := os.MkdirAll(sourceSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceSkill := []byte("---\nname: openplanner\ndescription: test\n---\n# Skill\n")
+	if err := os.WriteFile(filepath.Join(sourceSkillDir, "SKILL.md"), sourceSkill, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installEvalSkill(runRepo); err != nil {
+		t.Fatalf("installEvalSkill: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(runRepo, ".agents", "skills", "openplanner", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read installed skill: %v", err)
+	}
+	if !bytes.Equal(installed, sourceSkill) {
+		t.Fatalf("installed skill = %q, want exact source skill", installed)
+	}
+	if _, err := os.Stat(filepath.Join(runRepo, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md stat error = %v, want not exist", err)
+	}
+}
+
+func TestPromptInputPreflightFlagsOpenPlannerAgentsInstructions(t *testing.T) {
+	t.Parallel()
+
+	clean := `{"text":"<skills_instructions>- openplanner: Use this skill. (file: /tmp/run/repo/.agents/skills/openplanner/SKILL.md)</skills_instructions>"}`
+	if containsOpenPlannerAgentsInstructions(clean) {
+		t.Fatalf("clean rendered prompt flagged as contaminated")
+	}
+	contaminated := `{"text":"# AGENTS.md instructions for /tmp/run/repo\n\n<INSTRUCTIONS>\nFor valid tasks, pipe JSON to openplanner planning.\n{\"action\":\"list_agenda\"}\n</INSTRUCTIONS>"}`
+	if !containsOpenPlannerAgentsInstructions(contaminated) {
+		t.Fatalf("contaminated rendered prompt was not flagged")
+	}
+}
+
+func TestPreflightEvalContextRejectsMismatchedSkillAndAgentsFile(t *testing.T) {
+	t.Parallel()
+
+	temp := t.TempDir()
+	repoRoot := filepath.Join(temp, "src")
+	runRepo := filepath.Join(temp, "run")
+	sourceSkillDir := filepath.Join(repoRoot, "skills", "openplanner")
+	installedSkillDir := filepath.Join(runRepo, ".agents", "skills", "openplanner")
+	for _, dir := range []string{sourceSkillDir, installedSkillDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceSkill := []byte("---\nname: openplanner\ndescription: test\n---\n# Skill\n")
+	if err := os.WriteFile(filepath.Join(sourceSkillDir, "SKILL.md"), sourceSkill, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installedSkillDir, "SKILL.md"), []byte("different"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := preflightEvalContext(repoRoot, runRepo, filepath.Join(temp, "run-dir"), cacheConfig{Mode: cacheModeIsolated, RunRoot: temp})
+	if err == nil || !strings.Contains(err.Error(), "installed production skill") {
+		t.Fatalf("preflight mismatched skill error = %v, want installed skill mismatch", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(installedSkillDir, "SKILL.md"), sourceSkill, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRepo, "AGENTS.md"), []byte("product instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = preflightEvalContext(repoRoot, runRepo, filepath.Join(temp, "run-dir"), cacheConfig{Mode: cacheModeIsolated, RunRoot: temp})
+	if err == nil || !strings.Contains(err.Error(), "must not contain AGENTS.md") {
+		t.Fatalf("preflight AGENTS.md error = %v, want AGENTS.md rejection", err)
 	}
 }
 
@@ -278,20 +405,6 @@ func TestScenarioCoverageFullAndFiltered(t *testing.T) {
 	for _, coverage := range filtered {
 		if !coverage.Passed || !strings.Contains(coverage.Details, "filtered run") {
 			t.Fatalf("filtered coverage should pass with filtered details: %#v", coverage)
-		}
-	}
-}
-
-func TestEvalBootstrapInstructionsDoNotDuplicateTaskPolicy(t *testing.T) {
-	t.Parallel()
-
-	content := evalBootstrapInstructions()
-	if !strings.Contains(content, ".agents/skills/openplanner/SKILL.md") {
-		t.Fatalf("bootstrap content missing production skill path: %s", content)
-	}
-	for _, forbidden := range []string{"openplanner planning", `"action"`, "YYYY-MM-DD", "RFC3339", "recurrence"} {
-		if strings.Contains(content, forbidden) {
-			t.Fatalf("bootstrap content contains duplicated task policy %q: %s", forbidden, content)
 		}
 	}
 }

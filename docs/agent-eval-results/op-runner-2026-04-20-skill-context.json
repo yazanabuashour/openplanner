@@ -1,0 +1,429 @@
+{
+  "issue": "op-runner",
+  "date": "2026-04-20-skill-context",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "harness": "codex exec --json --full-auto from throwaway run directories; single-turn scenarios use --ephemeral, multi-turn scenarios resume a persisted eval session with explicit writable eval roots",
+  "parallelism": 1,
+  "cache_mode": "shared",
+  "cache_prewarm_seconds": 17.29,
+  "harness_elapsed_seconds": 85.05,
+  "phase_totals": {
+    "copy_repo_seconds": 0.05,
+    "install_variant_seconds": 46.25,
+    "agent_run_seconds": 34.83,
+    "total_seconds": 85.05
+  },
+  "effective_parallel_speedup": 0.41,
+  "parallel_efficiency": 0.41,
+  "codex_version": "codex-cli 0.122.0",
+  "history_isolation": {
+    "status": "passed",
+    "ephemeral_flag_required": true,
+    "run_directory_outside_repo": true,
+    "new_session_files_after_run": 0,
+    "single_turn_ephemeral_runs": 3,
+    "multi_turn_persisted_sessions": 0,
+    "multi_turn_persisted_turns": 0,
+    "openplanner_workspace_used": false,
+    "desktop_app_used": false,
+    "verification_method": "Single-turn scenarios use codex exec --ephemeral from \u003crun-root\u003e/production/\u003cscenario\u003e/repo. Multi-turn scenarios create one persisted Codex exec session per scenario and resume it for later turns; all raw logs stay under \u003crun-root\u003e."
+  },
+  "command_template": [
+    "OPENPLANNER_DATABASE_PATH=\u003crun-root\u003e/production/\u003cscenario\u003e/repo/openplanner.db",
+    "GOCACHE=\u003crun-root\u003e/shared-cache/gocache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gocache",
+    "GOMODCACHE=\u003crun-root\u003e/shared-cache/gomodcache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gomodcache",
+    "single turn: codex exec --json --ephemeral --full-auto --skip-git-repo-check --add-dir \u003crun-root\u003e/production/\u003cscenario\u003e --add-dir \u003crun-root\u003e/shared-cache when --cache-mode shared -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo -m gpt-5.4-mini -c model_reasoning_effort=\"medium\" -c shell_environment_policy.inherit=all \u003cnatural user prompt\u003e",
+    "multi turn: first turn uses codex exec without --ephemeral; later turns use codex exec -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo --add-dir \u003cwritable-eval-roots\u003e resume \u003cthread-id\u003e --json with per-turn logs"
+  ],
+  "metric_notes": [
+    "production total tools: 5",
+    "production total command executions: 5",
+    "non-cached input tokens exposed for 3/3 scenarios; aggregate=49340",
+    "CLI comparison gates are intentionally n/a because OpenPlanner has no human CLI baseline variant."
+  ],
+  "scenario_coverage": [
+    {
+      "category": "advanced_recurrence",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "future_surface",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "migration",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "multi_turn_disambiguation",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "routine",
+      "feature_state": "supported",
+      "scenarios": [
+        "create-dated-task",
+        "ensure-calendar"
+      ],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "update",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "validation",
+      "feature_state": "supported",
+      "scenarios": [
+        "ambiguous-short-date"
+      ],
+      "required": false,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    }
+  ],
+  "production_score": {
+    "recommendation": "prefer_runner_for_routine_openplanner_operations",
+    "passed": true,
+    "criteria": [
+      {
+        "name": "production_passes_all_scenarios",
+        "passed": true,
+        "details": "3/3 scenarios passed"
+      },
+      {
+        "name": "invalid_inputs_are_final_answer_only",
+        "passed": true,
+        "details": "invalid-input scenarios used no tools, no command executions, and at most one assistant answer"
+      },
+      {
+        "name": "no_forbidden_inspection_or_cli_usage",
+        "passed": true,
+        "details": "no removed-interface path inspection, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
+      },
+      {
+        "name": "aggregate_non_cached_tokens_reported",
+        "passed": true,
+        "details": "3/3 scenarios exposed usage; aggregate non-cached input tokens: 49340"
+      },
+      {
+        "name": "expanded_category_coverage",
+        "passed": true,
+        "details": "filtered run; full-suite category coverage not enforced"
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "production",
+      "scenario": "ensure-calendar",
+      "scenario_title": "Ensure a calendar idempotently",
+      "scenario_category": "routine",
+      "feature_state": "supported",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 14.76,
+      "phase_timings": {
+        "copy_repo_seconds": 0.01,
+        "install_variant_seconds": 14.73,
+        "agent_run_seconds": 14.76,
+        "total_seconds": 30.85
+      },
+      "metrics": {
+        "assistant_calls": 4,
+        "tool_calls": 3,
+        "command_executions": 3,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 99037,
+        "cached_input_tokens": 75776,
+        "non_cached_input_tokens": 23261,
+        "output_tokens": 727,
+        "event_type_counts": {
+          "item.completed": 7,
+          "item.started": 3,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected calendar in DB and final answer",
+        "calendars": [
+          {
+            "name": "Personal"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 14.76,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 4,
+            "tool_calls": 3,
+            "command_executions": 3,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 99037,
+            "cached_input_tokens": 75776,
+            "non_cached_input_tokens": 23261,
+            "output_tokens": 727,
+            "event_type_counts": {
+              "item.completed": 7,
+              "item.started": 3,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected calendar in DB and final answer",
+            "calendars": [
+              {
+                "name": "Personal"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/ensure-calendar/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "ensure Personal calendar",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/ensure-calendar/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "create-dated-task",
+      "scenario_title": "Create a dated task",
+      "scenario_category": "routine",
+      "feature_state": "supported",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 14.56,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "install_variant_seconds": 16.31,
+        "agent_run_seconds": 14.56,
+        "total_seconds": 32.36
+      },
+      "metrics": {
+        "assistant_calls": 3,
+        "tool_calls": 2,
+        "command_executions": 2,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 73770,
+        "cached_input_tokens": 68224,
+        "non_cached_input_tokens": 5546,
+        "output_tokens": 768,
+        "event_type_counts": {
+          "item.completed": 5,
+          "item.started": 2,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected tasks in DB and final answer",
+        "tasks": [
+          {
+            "title": "Review notes",
+            "due_date": "2026-04-16"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 14.56,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 3,
+            "tool_calls": 2,
+            "command_executions": 2,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 73770,
+            "cached_input_tokens": 68224,
+            "non_cached_input_tokens": 5546,
+            "output_tokens": 768,
+            "event_type_counts": {
+              "item.completed": 5,
+              "item.started": 2,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected tasks in DB and final answer",
+            "tasks": [
+              {
+                "title": "Review notes",
+                "due_date": "2026-04-16"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/create-dated-task/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "create Personal dated task",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/create-dated-task/turn-1/events.jsonl"
+    },
+    {
+      "variant": "production",
+      "scenario": "ambiguous-short-date",
+      "scenario_title": "Clarify an ambiguous short date without writing",
+      "scenario_category": "validation",
+      "feature_state": "supported",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 5.51,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "install_variant_seconds": 15.21,
+        "agent_run_seconds": 5.51,
+        "total_seconds": 21.84
+      },
+      "metrics": {
+        "assistant_calls": 1,
+        "tool_calls": 0,
+        "command_executions": 0,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 22965,
+        "cached_input_tokens": 2432,
+        "non_cached_input_tokens": 20533,
+        "output_tokens": 156,
+        "event_type_counts": {
+          "item.completed": 1,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected direct rejection or clarification without DB writes"
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 5.51,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 1,
+            "tool_calls": 0,
+            "command_executions": 0,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 22965,
+            "cached_input_tokens": 2432,
+            "non_cached_input_tokens": 20533,
+            "output_tokens": 156,
+            "event_type_counts": {
+              "item.completed": 1,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected direct rejection or clarification without DB writes"
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/ambiguous-short-date/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "Clarify an ambiguous short date without writing",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/ambiguous-short-date/turn-1/events.jsonl"
+    }
+  ],
+  "raw_logs_committed": false,
+  "raw_logs_note": "Raw codex exec event logs and stderr files were retained under \u003crun-root\u003e during execution and intentionally not committed.",
+  "token_usage_caveat": "Token metrics come from codex exec turn.completed usage events when exposed; unavailable usage is recorded as not exposed.",
+  "comparison_status": "not applicable: OpenPlanner has no human CLI baseline variant; this report scores the production JSON runner surface only"
+}

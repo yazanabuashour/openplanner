@@ -1,6 +1,6 @@
 ---
 name: openplanner
-description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner; reject ambiguous dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly before tools.
+description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner; reject ambiguous dates, year-first slash dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly without tools or file reads. For valid requests, pipe JSON to the installed runner; never inspect source, SQLite, or module-cache docs before the first runner call.
 license: MIT
 compatibility: Requires local filesystem access and an installed openplanner binary on PATH.
 metadata: { openplanner.repo: "https://github.com/yazanabuashour/openplanner", openplanner.runner: "openplanner planning", openplanner.skillArchive: "openplanner_<version>_skill.tar.gz" }

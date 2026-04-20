@@ -45,15 +45,23 @@ The expanded production gate adds:
 
 Unsupported gates become positive gates when their corresponding runner actions
 or fields are implemented. The production skill remains the only model-visible
-task policy; eval bootstrap instructions may point at the installed skill but
-must not duplicate JSON shapes, validation rules, recurrence rules, or runner
-command examples.
+task policy; the harness does not generate an OpenPlanner-specific eval
+`AGENTS.md` or paste skill content into `AGENTS.md`.
 
 Every scenario uses a fresh isolated repo copy, a fresh local database path, and
 reduced JSON/Markdown artifacts. Raw logs are not committed; reduced reports
 refer to them with `<run-root>` placeholders. The copied repo omits root
 `AGENTS.md`, stale `.agents` content, eval docs, reports, and harness code
 before installing the production skill and a private `openplanner` runner binary.
+The production skill is copied byte-for-byte to
+`.agents/skills/openplanner/SKILL.md` for the Codex eval harness.
+
+The harness renders model-visible context with `codex debug prompt-input` and
+fails preflight unless `openplanner` appears as an available project skill, the
+skill path points at the Codex eval harness install path, the installed skill
+bytes match `skills/openplanner/SKILL.md`, and no model-visible `AGENTS.md`
+block contains OpenPlanner runner commands, JSON shapes, validation rules, or
+product-agent behavior.
 
 Single-turn scenarios use `codex exec --ephemeral`. Multi-turn scenarios use one
 persisted eval session per scenario: the first turn creates a session in the
