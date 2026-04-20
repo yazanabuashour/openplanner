@@ -7,7 +7,11 @@ instruction is needed, put it in the production skill first.
 ## Active Surface
 
 - `production`: the installed `skills/openplanner/SKILL.md` skill plus an
-  installed `openplanner` runner on `PATH`.
+  installed `openplanner planning` JSON runner on `PATH`.
+
+OpenPlanner follows the OpenHealth AgentOps runner pattern for production evals:
+evaluate the same installed runner and production skill that real agents use,
+not a source-checkout helper, public SDK, REST API, hosted service, or web UI.
 
 ## Scenario Coverage
 
@@ -80,7 +84,7 @@ Production passes only when:
 - aggregate command/tool counts and non-cached input token totals are reported
 
 OpenPlanner currently has no human CLI baseline variant, so CLI comparison gates
-are intentionally `n/a` instead of mirrored from OpenHealth.
+are intentionally `n/a` unless a separate baseline is approved.
 
 ## Current Reports
 

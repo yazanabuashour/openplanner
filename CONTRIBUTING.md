@@ -23,7 +23,9 @@ Beads and Dolt are maintainer-only tools. They are optional for outside contribu
 ## Pull request expectations
 
 - Keep changes reviewable without access to Beads state.
-- Update repository docs when the public contract changes.
+- Update repository docs and release-contract tests when the JSON runner contract changes.
+- Do not present a public SDK, REST API, hosted service, or web UI as supported
+  behavior unless that product surface has been explicitly approved.
 - Do not commit credentials, private infrastructure details, or sensitive sample data.
 - Route security issues through the private process in [SECURITY.md](SECURITY.md), not through public issues or pull requests.
 
@@ -48,7 +50,8 @@ Before `1.0`, compatibility is best effort and may change between releases. The
 supported product surface is the installed `openplanner` JSON runner and the
 Agent Skills-compatible `skills/openplanner` payload. SQLite storage defaults to
 `${XDG_DATA_HOME:-~/.local/share}/openplanner`, plus explicit path override
-support. No compatibility promise is made for a hosted service or background
-process because none is shipped.
+support. No compatibility promise is made for a public SDK, REST API, hosted
+service, background process, or web UI because none is shipped as a v1 product
+surface.
 
 Maintainer workflow notes live in [docs/maintainers.md](docs/maintainers.md).

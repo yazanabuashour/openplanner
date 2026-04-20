@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPublicGuidanceUsesCodeFirstRunnerSurface(t *testing.T) {
+func TestPublicGuidanceUsesJSONRunnerProductSurface(t *testing.T) {
 	t.Parallel()
 
 	files := []string{
@@ -23,7 +23,15 @@ func TestPublicGuidanceUsesCodeFirstRunnerSurface(t *testing.T) {
 		"openplanner-agentops",
 		"go run ./cmd/openplanner",
 		"openapi/openapi.yaml",
-		"OpenAPI contract",
+		"OpenAPI contract is the",
+		"public SDK is the product surface",
+		"REST API is the product surface",
+		"hosted service is the product surface",
+		"web UI is the product surface",
+		"ships a public SDK",
+		"ships a REST API",
+		"ships a hosted service",
+		"ships a web UI",
 	}
 
 	for _, file := range files {
@@ -34,6 +42,56 @@ func TestPublicGuidanceUsesCodeFirstRunnerSurface(t *testing.T) {
 		for _, bad := range forbidden {
 			if strings.Contains(string(content), bad) {
 				t.Fatalf("%s contains stale guidance %q", file, bad)
+			}
+		}
+	}
+}
+
+func TestProductSurfaceGuidanceIsPresent(t *testing.T) {
+	t.Parallel()
+
+	required := map[string][]string{
+		"../../README.md": {
+			"## Product Surface",
+			"installed `openplanner planning` JSON runner",
+			"portable `skills/openplanner` payload",
+			"not public extension points",
+			"not v1 product deliverables",
+		},
+		"../../CONTRIBUTING.md": {
+			"supported product surface is the installed `openplanner` JSON runner",
+			"Agent Skills-compatible `skills/openplanner` payload",
+			"No compatibility promise is made for a public SDK, REST API, hosted",
+		},
+		"../../docs/maintainers.md": {
+			"library-first research direction is superseded for v1",
+			"JSON-runner-first direction",
+			"`op-2vv`",
+			"installed `openplanner planning` JSON runner",
+		},
+		"../../docs/agent-evals.md": {
+			"OpenHealth AgentOps runner pattern",
+			"installed `openplanner planning` JSON runner",
+			"CLI comparison gates",
+			"`n/a` unless a separate baseline is approved",
+		},
+		"../../docs/agent-eval-results/README.md": {
+			"production JSON runner",
+			"`<run-root>` placeholders",
+			"repo-relative artifact paths",
+			"OpenHealth AgentOps runner pattern",
+		},
+	}
+
+	for file, phrases := range required {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := string(content)
+		for _, phrase := range phrases {
+			if !strings.Contains(text, phrase) {
+				t.Fatalf("%s missing product-surface guidance %q", file, phrase)
 			}
 		}
 	}

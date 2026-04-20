@@ -47,6 +47,20 @@ curl -fsSL https://github.com/yazanabuashour/openplanner/releases/latest/downloa
 Optional per-agent examples are in [docs/agent-install.md](docs/agent-install.md).
 Those examples are not the OpenPlanner install contract.
 
+## Product Surface
+
+OpenPlanner's v1 product surface is the installed `openplanner planning` JSON runner
+plus the portable `skills/openplanner` payload. Agents should integrate
+through that runner and skill rather than importing repository packages.
+
+The `internal/runner`, `internal/service`, `internal/store`, and domain packages are
+implementation boundaries that support the runner. They are not public extension points
+and do not carry SDK compatibility promises.
+
+A public SDK, REST API, OpenAPI contract, hosted service, package registry, and
+web UI are not v1 product deliverables unless a future roadmap issue explicitly
+reapproves them.
+
 ## Runner Interface
 
 The skill calls the installed runner:

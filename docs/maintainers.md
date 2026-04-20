@@ -8,6 +8,19 @@ an Agent Skills-compatible skill, and release integrity metadata. There is still
 no hosted service, no auth-backed product surface, no background daemon, and no
 package registry. Keep maintainer docs honest about that status.
 
+## Product surface decision
+
+The earlier library-first research direction is superseded for v1 by the
+JSON-runner-first direction. Roadmap and architecture work under `op-2vv` should
+preserve the installed `openplanner planning` JSON runner and portable
+`skills/openplanner` payload as the agent-facing contract.
+
+Internal Go packages may be refactored to support the runner, but they should
+not be documented as public APIs or compatibility surfaces. Do not introduce
+public package/API compatibility promises, deploy workflows, ports, OpenAPI
+contracts, or UI docs without a new issue that explicitly approves that product
+surface.
+
 ## Initial Setup
 
 Preferred tool install:
