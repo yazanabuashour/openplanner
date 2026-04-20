@@ -41,6 +41,68 @@ func TestParseRunOptionsDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestParseScaleOptionsDefaultsAndValidation(t *testing.T) {
+	t.Parallel()
+
+	options, err := parseScaleOptions([]string{})
+	if err != nil {
+		t.Fatalf("parseScaleOptions default: %v", err)
+	}
+	if options.Events != defaultScaleEvents || options.Tasks != defaultScaleTasks || options.Recurring != defaultScaleRecurring {
+		t.Fatalf("default scale options = %#v", options)
+	}
+	if options.Completions != defaultScaleCompletions || options.Limit != defaultScaleLimit {
+		t.Fatalf("default scale options = %#v", options)
+	}
+
+	options, err = parseScaleOptions([]string{"--run-root", "root", "--date", "2026-04-20", "--events", "10", "--tasks", "11", "--recurring", "3", "--completions", "4", "--limit", "5"})
+	if err != nil {
+		t.Fatalf("parseScaleOptions explicit: %v", err)
+	}
+	if options.RunRoot != "root" || options.Date != "2026-04-20" || options.Events != 10 || options.Tasks != 11 || options.Recurring != 3 || options.Completions != 4 || options.Limit != 5 {
+		t.Fatalf("explicit scale options = %#v", options)
+	}
+
+	for _, args := range [][]string{
+		{"--events", "0"},
+		{"--tasks", "0"},
+		{"--recurring", "0"},
+		{"--completions", "-1"},
+		{"--limit", "0"},
+		{"--limit", "201"},
+	} {
+		if _, err := parseScaleOptions(args); err == nil {
+			t.Fatalf("parseScaleOptions(%v) error = nil, want validation error", args)
+		}
+	}
+}
+
+func TestScaleResultsPassFail(t *testing.T) {
+	t.Parallel()
+
+	passed := []scaleResult{{Scenario: "a", Passed: true}, {Scenario: "b", Passed: true}}
+	if !scaleResultsPassed(passed) {
+		t.Fatalf("scaleResultsPassed returned false for all-pass results")
+	}
+	failed := []scaleResult{{Scenario: "a", Passed: true}, {Scenario: "b", Passed: false}}
+	if scaleResultsPassed(failed) {
+		t.Fatalf("scaleResultsPassed returned true for failed results")
+	}
+	failures := failedScaleResults(failed)
+	if len(failures) != 1 || failures[0].Scenario != "b" {
+		t.Fatalf("failedScaleResults = %#v", failures)
+	}
+}
+
+func TestFirstBeadsIDIgnoresWarnings(t *testing.T) {
+	t.Parallel()
+
+	output := "op-abc\nWarning: auto-export: git add failed: exit status 1"
+	if got := firstBeadsID(output); got != "op-abc" {
+		t.Fatalf("firstBeadsID() = %q, want op-abc", got)
+	}
+}
+
 func TestSelectScenariosRejectsEmptyFilter(t *testing.T) {
 	t.Parallel()
 
@@ -380,6 +442,98 @@ func TestWriteReportIncludesTimingAndTurnDetails(t *testing.T) {
 	for _, want := range []string{"Effective parallel speedup: `2.50x`", "Parallel efficiency: `0.62`", "## Scenario Coverage", "## Phase Timings", "| agent_run | 10.00 |", "## Turn Details", "turn-1/events.jsonl"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestWriteScaleReportIncludesDatasetAndThresholds(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "scale.md")
+	value := scaleReport{
+		Issue:              scaleIssueID,
+		Date:               "2026-04-20",
+		Harness:            "scale harness",
+		ThresholdPolicy:    "local maintainer thresholds",
+		RunRoot:            "<run-root>",
+		DatabasePath:       "<run-root>/scale/openplanner.db",
+		HarnessWallSeconds: 1.25,
+		Passed:             true,
+		Dataset: scaleDataset{
+			Calendars:       2,
+			Events:          12,
+			Tasks:           13,
+			RecurringEvents: 3,
+			RecurringTasks:  3,
+			RecurrenceRules: 6,
+			CompletionRows:  4,
+			AgendaRangeDays: 30,
+			Limit:           5,
+		},
+		Results: []scaleResult{{
+			Scenario:         "large-agenda-window",
+			Passed:           true,
+			WallSeconds:      0.5,
+			ThresholdSeconds: 5,
+			ItemsReturned:    5,
+			PagesTraversed:   1,
+			Events:           12,
+			Tasks:            13,
+			RecurrenceRules:  6,
+			CompletionRows:   4,
+			Notes:            []string{"ok"},
+		}},
+		RawArtifactsNote: "Raw scale database stayed under <run-root>/scale.",
+	}
+	if err := writeScaleMarkdown(path, value); err != nil {
+		t.Fatalf("writeScaleMarkdown: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read scale report: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"# OpenPlanner Scale Eval 2026-04-20", "## Dataset", "`large-agenda-window`", "Threshold Seconds", "<run-root>/scale/openplanner.db"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("scale report missing %q:\n%s", want, text)
+		}
+	}
+	for _, bad := range []string{"/Users/", "/home/", "/tmp/", "/var/folders/"} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("scale report contains machine-absolute path marker %q:\n%s", bad, text)
+		}
+	}
+}
+
+func TestRunScaleEvalSmallFixture(t *testing.T) {
+	t.Parallel()
+
+	report, err := runScaleEval(t.TempDir(), scaleOptions{
+		Date:        "test",
+		Events:      4,
+		Tasks:       4,
+		Recurring:   2,
+		Completions: 2,
+		Limit:       20,
+	})
+	if err != nil {
+		t.Fatalf("runScaleEval: %v", err)
+	}
+	if len(report.Results) != 4 {
+		t.Fatalf("scale results length = %d, want 4", len(report.Results))
+	}
+	if report.Dataset.Events != 6 || report.Dataset.Tasks != 6 || report.Dataset.RecurrenceRules != 4 || report.Dataset.CompletionRows != 2 {
+		t.Fatalf("scale dataset = %#v", report.Dataset)
+	}
+	for _, result := range report.Results {
+		if result.ThresholdSeconds <= 0 {
+			t.Fatalf("%s threshold = %.2f, want positive", result.Scenario, result.ThresholdSeconds)
+		}
+		if result.WallSeconds < 0 {
+			t.Fatalf("%s wall = %.2f, want non-negative", result.Scenario, result.WallSeconds)
+		}
+		if !result.Passed {
+			t.Fatalf("%s did not pass small fixture: %#v", result.Scenario, result)
 		}
 	}
 }

@@ -27,11 +27,25 @@ import (
 
 const (
 	issueID               = "op-runner"
+	scaleIssueID          = "op-2vv.3"
 	modelName             = "gpt-5.4-mini"
 	reasoningEffort       = "medium"
 	defaultRunParallelism = 4
 	cacheModeShared       = "shared"
 	cacheModeIsolated     = "isolated"
+
+	defaultScaleEvents      = 1000
+	defaultScaleTasks       = 1000
+	defaultScaleRecurring   = 200
+	defaultScaleCompletions = 500
+	defaultScaleLimit       = 50
+	defaultScaleRangeDays   = 30
+	maxScaleLimit           = 200
+
+	scaleLargeAgendaThresholdSeconds         = 5.0
+	scaleRecurringEventThresholdSeconds      = 3.0
+	scaleRecurringCompletionThresholdSeconds = 5.0
+	scaleListPaginationThresholdSeconds      = 3.0
 
 	scenarioCategoryRoutine               = "routine"
 	scenarioCategoryValidation            = "validation"
@@ -283,9 +297,69 @@ type runOptions struct {
 	CacheMode      string
 }
 
+type scaleOptions struct {
+	RunRoot     string
+	Date        string
+	Events      int
+	Tasks       int
+	Recurring   int
+	Completions int
+	Limit       int
+}
+
 type cacheConfig struct {
 	Mode    string
 	RunRoot string
+}
+
+type scaleReport struct {
+	Issue              string        `json:"issue"`
+	Date               string        `json:"date"`
+	Harness            string        `json:"harness"`
+	ThresholdPolicy    string        `json:"threshold_policy"`
+	RunRoot            string        `json:"run_root"`
+	DatabasePath       string        `json:"database_path"`
+	Dataset            scaleDataset  `json:"dataset"`
+	HarnessWallSeconds float64       `json:"harness_wall_seconds"`
+	Passed             bool          `json:"passed"`
+	Results            []scaleResult `json:"results"`
+	BlockerIssues      []string      `json:"blocker_issues,omitempty"`
+	RawArtifactsNote   string        `json:"raw_artifacts_note"`
+}
+
+type scaleDataset struct {
+	Calendars       int `json:"calendars"`
+	Events          int `json:"events"`
+	Tasks           int `json:"tasks"`
+	RecurringEvents int `json:"recurring_events"`
+	RecurringTasks  int `json:"recurring_tasks"`
+	RecurrenceRules int `json:"recurrence_rules"`
+	CompletionRows  int `json:"completion_rows"`
+	AgendaRangeDays int `json:"agenda_range_days"`
+	Limit           int `json:"limit"`
+}
+
+type scaleResult struct {
+	Scenario         string   `json:"scenario"`
+	Description      string   `json:"description"`
+	Calendars        int      `json:"calendars"`
+	Events           int      `json:"events"`
+	Tasks            int      `json:"tasks"`
+	RecurrenceRules  int      `json:"recurrence_rules"`
+	CompletionRows   int      `json:"completion_rows"`
+	ItemsReturned    int      `json:"items_returned"`
+	PagesTraversed   int      `json:"pages_traversed"`
+	WallSeconds      float64  `json:"wall_seconds"`
+	ThresholdSeconds float64  `json:"threshold_seconds"`
+	Passed           bool     `json:"passed"`
+	Notes            []string `json:"notes,omitempty"`
+}
+
+type scaleSeed struct {
+	WorkCalendarID     string
+	PersonalCalendarID string
+	RecurringEventIDs  []string
+	RecurringTaskIDs   []string
 }
 
 type evalJob struct {
@@ -311,11 +385,13 @@ type parsedMetrics struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		failf("usage: openplanner-agent-eval <run>")
+		failf("usage: openplanner-agent-eval <run|scale>")
 	}
 	switch os.Args[1] {
 	case "run":
 		runCommand(os.Args[2:])
+	case "scale":
+		scaleCommand(os.Args[2:])
 	default:
 		failf("unknown command %q", os.Args[1])
 	}
@@ -347,6 +423,51 @@ func parseRunOptions(args []string) (runOptions, error) {
 	case cacheModeShared, cacheModeIsolated:
 	default:
 		return runOptions{}, fmt.Errorf("cache-mode must be %q or %q", cacheModeShared, cacheModeIsolated)
+	}
+	return options, nil
+}
+
+func parseScaleOptions(args []string) (scaleOptions, error) {
+	options := scaleOptions{
+		Date:        time.Now().Format(time.DateOnly),
+		Events:      defaultScaleEvents,
+		Tasks:       defaultScaleTasks,
+		Recurring:   defaultScaleRecurring,
+		Completions: defaultScaleCompletions,
+		Limit:       defaultScaleLimit,
+	}
+	fs := flag.NewFlagSet("scale", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&options.RunRoot, "run-root", options.RunRoot, "directory for raw scale artifacts outside the repo")
+	fs.StringVar(&options.Date, "date", options.Date, "report date in YYYY-MM-DD form or report suffix")
+	fs.IntVar(&options.Events, "events", options.Events, "number of one-off events to seed")
+	fs.IntVar(&options.Tasks, "tasks", options.Tasks, "number of one-off tasks to seed")
+	fs.IntVar(&options.Recurring, "recurring", options.Recurring, "number of recurring events and recurring tasks to seed")
+	fs.IntVar(&options.Completions, "completions", options.Completions, "number of recurring task completion rows to seed")
+	fs.IntVar(&options.Limit, "limit", options.Limit, "runner list limit for pagination and agenda probes")
+	if err := fs.Parse(args); err != nil {
+		return scaleOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return scaleOptions{}, errors.New("scale does not accept positional arguments")
+	}
+	if options.Events < 1 {
+		return scaleOptions{}, errors.New("events must be greater than or equal to 1")
+	}
+	if options.Tasks < 1 {
+		return scaleOptions{}, errors.New("tasks must be greater than or equal to 1")
+	}
+	if options.Recurring < 1 {
+		return scaleOptions{}, errors.New("recurring must be greater than or equal to 1")
+	}
+	if options.Completions < 0 {
+		return scaleOptions{}, errors.New("completions must be greater than or equal to 0")
+	}
+	if options.Limit < 1 {
+		return scaleOptions{}, errors.New("limit must be greater than or equal to 1")
+	}
+	if options.Limit > maxScaleLimit {
+		return scaleOptions{}, fmt.Errorf("limit must be less than or equal to %d", maxScaleLimit)
 	}
 	return options, nil
 }
@@ -484,6 +605,59 @@ func runCommand(args []string) {
 	}
 	if err := writeMarkdown(mdPath, outReport); err != nil {
 		failf("write markdown report: %v", err)
+	}
+}
+
+func scaleCommand(args []string) {
+	options, err := parseScaleOptions(args)
+	if err != nil {
+		failf("parse scale flags: %v", err)
+	}
+
+	repoRoot, err := repoRoot()
+	if err != nil {
+		failf("resolve repo root: %v", err)
+	}
+
+	runRoot := options.RunRoot
+	if runRoot == "" {
+		runRoot, err = os.MkdirTemp("", "openplanner-scale-eval-*")
+		if err != nil {
+			failf("create scale run root: %v", err)
+		}
+	} else if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		failf("create scale run root %s: %v", runRoot, err)
+	}
+	runRoot, err = filepath.Abs(runRoot)
+	if err != nil {
+		failf("absolute scale run root: %v", err)
+	}
+	if isWithin(runRoot, repoRoot) {
+		failf("scale run root must be outside the repository: %s", runRoot)
+	}
+
+	outReport, err := runScaleEval(runRoot, options)
+	if err != nil {
+		failf("run scale eval: %v", err)
+	}
+	if failures := failedScaleResults(outReport.Results); len(failures) > 0 {
+		blockers, err := createScaleBlockerIssues(repoRoot, failures)
+		if err != nil {
+			failf("create scale blocker issues: %v", err)
+		}
+		outReport.BlockerIssues = blockers
+	}
+
+	outDir := filepath.Join(repoRoot, "docs", "agent-eval-results")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		failf("create report dir: %v", err)
+	}
+	reportBase := fmt.Sprintf("%s-%s-scale", scaleIssueID, options.Date)
+	if err := writeJSON(filepath.Join(outDir, reportBase+".json"), outReport); err != nil {
+		failf("write scale json report: %v", err)
+	}
+	if err := writeScaleMarkdown(filepath.Join(outDir, reportBase+".md"), outReport); err != nil {
+		failf("write scale markdown report: %v", err)
 	}
 }
 
@@ -638,6 +812,494 @@ func runOne(repoRoot string, runRoot string, currentScenario scenario, cache cac
 	}
 	_ = writeJSON(filepath.Join(runDir, "run-summary.json"), result)
 	return result, nil
+}
+
+func runScaleEval(runRoot string, options scaleOptions) (scaleReport, error) {
+	scaleDir := filepath.Join(runRoot, "scale")
+	if err := os.RemoveAll(scaleDir); err != nil {
+		return scaleReport{}, fmt.Errorf("reset scale dir: %w", err)
+	}
+	if err := os.MkdirAll(scaleDir, 0o755); err != nil {
+		return scaleReport{}, fmt.Errorf("create scale dir: %w", err)
+	}
+	dbPath := filepath.Join(scaleDir, "openplanner.db")
+	dataset := scaleDatasetForOptions(options)
+
+	start := time.Now()
+	seed, err := seedScaleDatabase(dbPath, options)
+	if err != nil {
+		return scaleReport{}, fmt.Errorf("seed scale database: %w", err)
+	}
+
+	results := []scaleResult{
+		runScaleLargeAgenda(dbPath, dataset, options),
+		runScaleRecurringEvents(dbPath, dataset, options, seed),
+		runScaleRecurringTaskCompletions(dbPath, dataset, options),
+		runScaleListPagination(dbPath, dataset, options),
+	}
+	return scaleReport{
+		Issue:              scaleIssueID,
+		Date:               options.Date,
+		Harness:            "go runner scale eval using runner.RunPlanningTask against an isolated SQLite database",
+		ThresholdPolicy:    "local maintainer thresholds; failures create beads blockers but thresholds are not portable CI guarantees",
+		RunRoot:            "<run-root>",
+		DatabasePath:       "<run-root>/scale/openplanner.db",
+		Dataset:            dataset,
+		HarnessWallSeconds: roundSeconds(time.Since(start).Seconds()),
+		Passed:             scaleResultsPassed(results),
+		Results:            results,
+		RawArtifactsNote:   "Raw scale database and transient artifacts were retained under <run-root>/scale during execution and intentionally not committed.",
+	}, nil
+}
+
+func scaleDatasetForOptions(options scaleOptions) scaleDataset {
+	return scaleDataset{
+		Calendars:       2,
+		Events:          options.Events + options.Recurring,
+		Tasks:           options.Tasks + options.Recurring,
+		RecurringEvents: options.Recurring,
+		RecurringTasks:  options.Recurring,
+		RecurrenceRules: options.Recurring * 2,
+		CompletionRows:  options.Completions,
+		AgendaRangeDays: defaultScaleRangeDays,
+		Limit:           options.Limit,
+	}
+}
+
+func seedScaleDatabase(dbPath string, options scaleOptions) (scaleSeed, error) {
+	work, err := runRequiredScaleRequest(dbPath, runner.PlanningTaskRequest{
+		Action:       runner.PlanningTaskActionEnsureCalendar,
+		CalendarName: "Work",
+	})
+	if err != nil {
+		return scaleSeed{}, err
+	}
+	personal, err := runRequiredScaleRequest(dbPath, runner.PlanningTaskRequest{
+		Action:       runner.PlanningTaskActionEnsureCalendar,
+		CalendarName: "Personal",
+	})
+	if err != nil {
+		return scaleSeed{}, err
+	}
+	if len(work.Calendars) != 1 || len(personal.Calendars) != 1 {
+		return scaleSeed{}, errors.New("scale seed calendar result missing calendar details")
+	}
+	seed := scaleSeed{
+		WorkCalendarID:     work.Calendars[0].ID,
+		PersonalCalendarID: personal.Calendars[0].ID,
+	}
+
+	base := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < options.Events; i++ {
+		start := base.AddDate(0, 0, i%60).Add(time.Duration(i%8) * time.Hour)
+		calendarID := seed.WorkCalendarID
+		if i%2 == 1 {
+			calendarID = seed.PersonalCalendarID
+		}
+		if _, err := runRequiredScaleRequest(dbPath, runner.PlanningTaskRequest{
+			Action:     runner.PlanningTaskActionCreateEvent,
+			CalendarID: calendarID,
+			Title:      fmt.Sprintf("Scale event %04d", i+1),
+			StartAt:    start.Format(time.RFC3339),
+			EndAt:      start.Add(30 * time.Minute).Format(time.RFC3339),
+		}); err != nil {
+			return scaleSeed{}, err
+		}
+	}
+
+	for i := 0; i < options.Tasks; i++ {
+		calendarID := seed.PersonalCalendarID
+		if i%2 == 1 {
+			calendarID = seed.WorkCalendarID
+		}
+		if _, err := runRequiredScaleRequest(dbPath, runner.PlanningTaskRequest{
+			Action:     runner.PlanningTaskActionCreateTask,
+			CalendarID: calendarID,
+			Title:      fmt.Sprintf("Scale task %04d", i+1),
+			DueDate:    base.AddDate(0, 0, i%60).Format(time.DateOnly),
+		}); err != nil {
+			return scaleSeed{}, err
+		}
+	}
+
+	for i := 0; i < options.Recurring; i++ {
+		eventResult, err := runRequiredScaleRequest(dbPath, scaleRecurringEventRequest(seed, base, i))
+		if err != nil {
+			return scaleSeed{}, err
+		}
+		if len(eventResult.Events) != 1 {
+			return scaleSeed{}, fmt.Errorf("recurring event seed %d missing event details", i)
+		}
+		seed.RecurringEventIDs = append(seed.RecurringEventIDs, eventResult.Events[0].ID)
+		taskResult, err := runRequiredScaleRequest(dbPath, scaleRecurringTaskRequest(seed, i))
+		if err != nil {
+			return scaleSeed{}, err
+		}
+		if len(taskResult.Tasks) != 1 {
+			return scaleSeed{}, fmt.Errorf("recurring task seed %d missing task details", i)
+		}
+		seed.RecurringTaskIDs = append(seed.RecurringTaskIDs, taskResult.Tasks[0].ID)
+	}
+
+	for i := 0; i < options.Completions && len(seed.RecurringTaskIDs) > 0; i++ {
+		taskID := seed.RecurringTaskIDs[i%len(seed.RecurringTaskIDs)]
+		occurrenceOffset := i / len(seed.RecurringTaskIDs)
+		if _, err := runRequiredScaleRequest(dbPath, runner.PlanningTaskRequest{
+			Action:         runner.PlanningTaskActionCompleteTask,
+			TaskID:         taskID,
+			OccurrenceDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, occurrenceOffset).Format(time.DateOnly),
+		}); err != nil {
+			return scaleSeed{}, err
+		}
+	}
+
+	return seed, nil
+}
+
+func scaleRecurringEventRequest(seed scaleSeed, base time.Time, index int) runner.PlanningTaskRequest {
+	calendarID := seed.WorkCalendarID
+	if index%2 == 1 {
+		calendarID = seed.PersonalCalendarID
+	}
+	count := int32(defaultScaleRangeDays + 15)
+	switch index % 3 {
+	case 0:
+		start := base.Add(time.Duration(index%6) * time.Hour)
+		return runner.PlanningTaskRequest{
+			Action:     runner.PlanningTaskActionCreateEvent,
+			CalendarID: calendarID,
+			Title:      fmt.Sprintf("Scale recurring daily event %04d", index+1),
+			StartAt:    start.Format(time.RFC3339),
+			EndAt:      start.Add(30 * time.Minute).Format(time.RFC3339),
+			Recurrence: &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+		}
+	case 1:
+		return runner.PlanningTaskRequest{
+			Action:     runner.PlanningTaskActionCreateEvent,
+			CalendarID: calendarID,
+			Title:      fmt.Sprintf("Scale recurring weekly event %04d", index+1),
+			StartDate:  "2026-04-01",
+			Recurrence: &runner.RecurrenceRuleRequest{Frequency: "weekly", Count: &count, ByWeekday: []string{"MO", "WE", "FR"}},
+		}
+	default:
+		monthCount := int32(12)
+		start := base.Add(time.Duration(index%6) * time.Hour)
+		return runner.PlanningTaskRequest{
+			Action:     runner.PlanningTaskActionCreateEvent,
+			CalendarID: calendarID,
+			Title:      fmt.Sprintf("Scale recurring monthly event %04d", index+1),
+			StartAt:    start.Format(time.RFC3339),
+			EndAt:      start.Add(45 * time.Minute).Format(time.RFC3339),
+			Recurrence: &runner.RecurrenceRuleRequest{Frequency: "monthly", Count: &monthCount, ByMonthDay: []int32{1, 15}},
+		}
+	}
+}
+
+func scaleRecurringTaskRequest(seed scaleSeed, index int) runner.PlanningTaskRequest {
+	calendarID := seed.PersonalCalendarID
+	if index%2 == 1 {
+		calendarID = seed.WorkCalendarID
+	}
+	count := int32(defaultScaleRangeDays + 15)
+	return runner.PlanningTaskRequest{
+		Action:     runner.PlanningTaskActionCreateTask,
+		CalendarID: calendarID,
+		Title:      fmt.Sprintf("Scale recurring task %04d", index+1),
+		DueDate:    "2026-04-01",
+		Recurrence: &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+	}
+}
+
+func runRequiredScaleRequest(dbPath string, request runner.PlanningTaskRequest) (runner.PlanningTaskResult, error) {
+	result, err := runPlanning(dbPath, request)
+	if err != nil {
+		return runner.PlanningTaskResult{}, err
+	}
+	if result.Rejected {
+		return runner.PlanningTaskResult{}, errors.New(result.RejectionReason)
+	}
+	return result, nil
+}
+
+func runScaleLargeAgenda(dbPath string, dataset scaleDataset, options scaleOptions) scaleResult {
+	result, wallSeconds, err := timedScalePlanning(dbPath, runner.PlanningTaskRequest{
+		Action: runner.PlanningTaskActionListAgenda,
+		From:   "2026-04-01T00:00:00Z",
+		To:     "2026-05-01T00:00:00Z",
+		Limit:  &options.Limit,
+	})
+	out := baseScaleResult("large-agenda-window", "bounded agenda generation over a mixed large local dataset", dataset, scaleLargeAgendaThresholdSeconds, wallSeconds)
+	if err != nil {
+		out.Notes = append(out.Notes, err.Error())
+		return out
+	}
+	out.ItemsReturned = len(result.Agenda)
+	out.PagesTraversed = 1
+	out.Passed = !result.Rejected && out.ItemsReturned > 0 && wallSeconds <= out.ThresholdSeconds
+	if result.Rejected {
+		out.Notes = append(out.Notes, result.RejectionReason)
+	}
+	return out
+}
+
+func runScaleRecurringEvents(dbPath string, dataset scaleDataset, options scaleOptions, seed scaleSeed) scaleResult {
+	itemsReturned, pagesTraversed, timedRecurringEventItems, allDayRecurringEventItems, wallSeconds, err := traverseScaleAgendaForRecurringEvents(dbPath, options.Limit, seed.RecurringEventIDs)
+	out := baseScaleResult("recurring-event-expansion", "agenda probe that expands recurring timed and all-day events", dataset, scaleRecurringEventThresholdSeconds, wallSeconds)
+	if err != nil {
+		out.Notes = append(out.Notes, err.Error())
+		return out
+	}
+	out.ItemsReturned = itemsReturned
+	out.PagesTraversed = pagesTraversed
+	out.Passed = out.ItemsReturned > 0 && timedRecurringEventItems > 0 && allDayRecurringEventItems > 0 && wallSeconds <= out.ThresholdSeconds
+	out.Notes = append(out.Notes, fmt.Sprintf("timed recurring event items observed: %d; all-day recurring event items observed: %d", timedRecurringEventItems, allDayRecurringEventItems))
+	return out
+}
+
+func traverseScaleAgendaForRecurringEvents(dbPath string, limit int, recurringEventIDs []string) (int, int, int, int, float64, error) {
+	start := time.Now()
+	recurringEvents := map[string]struct{}{}
+	for _, id := range recurringEventIDs {
+		recurringEvents[id] = struct{}{}
+	}
+	if len(recurringEvents) == 0 {
+		return 0, 0, 0, 0, 0, errors.New("no recurring event ids were seeded")
+	}
+
+	cursor := ""
+	items := 0
+	pages := 0
+	timedRecurringEventItems := 0
+	allDayRecurringEventItems := 0
+	for {
+		request := runner.PlanningTaskRequest{
+			Action: runner.PlanningTaskActionListAgenda,
+			From:   "2026-04-01T00:00:00Z",
+			To:     "2026-05-01T00:00:00Z",
+			Cursor: cursor,
+			Limit:  &limit,
+		}
+		result, err := runPlanning(dbPath, request)
+		if err != nil {
+			return items, pages, timedRecurringEventItems, allDayRecurringEventItems, roundSeconds(time.Since(start).Seconds()), err
+		}
+		if result.Rejected {
+			return items, pages, timedRecurringEventItems, allDayRecurringEventItems, roundSeconds(time.Since(start).Seconds()), errors.New(result.RejectionReason)
+		}
+		pages++
+		items += len(result.Agenda)
+		for _, item := range result.Agenda {
+			if item.Kind != "event" {
+				continue
+			}
+			if _, ok := recurringEvents[item.SourceID]; ok {
+				if item.StartAt != "" {
+					timedRecurringEventItems++
+				}
+				if item.StartDate != "" {
+					allDayRecurringEventItems++
+				}
+			}
+		}
+		if (timedRecurringEventItems > 0 && allDayRecurringEventItems > 0) || result.NextCursor == "" {
+			return items, pages, timedRecurringEventItems, allDayRecurringEventItems, roundSeconds(time.Since(start).Seconds()), nil
+		}
+		cursor = result.NextCursor
+		if pages > 100000 {
+			return items, pages, timedRecurringEventItems, allDayRecurringEventItems, roundSeconds(time.Since(start).Seconds()), errors.New("agenda pagination did not terminate")
+		}
+	}
+}
+
+func runScaleRecurringTaskCompletions(dbPath string, dataset scaleDataset, options scaleOptions) scaleResult {
+	itemsReturned, pagesTraversed, completedItems, wallSeconds, err := traverseScaleAgendaForCompletions(dbPath, 200)
+	out := baseScaleResult("recurring-task-completion-lookup", "agenda probe that loads recurring task completion rows", dataset, scaleRecurringCompletionThresholdSeconds, wallSeconds)
+	if err != nil {
+		out.Notes = append(out.Notes, err.Error())
+		return out
+	}
+	out.ItemsReturned = itemsReturned
+	out.PagesTraversed = pagesTraversed
+	out.Passed = out.ItemsReturned > 0 && wallSeconds <= out.ThresholdSeconds
+	if dataset.CompletionRows > 0 {
+		out.Passed = out.Passed && completedItems > 0
+	}
+	out.Notes = append(out.Notes, fmt.Sprintf("completed agenda items observed: %d", completedItems))
+	return out
+}
+
+func runScaleListPagination(dbPath string, dataset scaleDataset, options scaleOptions) scaleResult {
+	start := time.Now()
+	eventItems, eventPages, eventErr := traverseScaleList(dbPath, runner.PlanningTaskActionListEvents, options.Limit)
+	taskItems, taskPages, taskErr := traverseScaleList(dbPath, runner.PlanningTaskActionListTasks, options.Limit)
+	wallSeconds := roundSeconds(time.Since(start).Seconds())
+	out := baseScaleResult("list-pagination", "full cursor traversal for event and task list actions", dataset, scaleListPaginationThresholdSeconds, wallSeconds)
+	out.ItemsReturned = eventItems + taskItems
+	out.PagesTraversed = eventPages + taskPages
+	if eventErr != nil {
+		out.Notes = append(out.Notes, "events: "+eventErr.Error())
+	}
+	if taskErr != nil {
+		out.Notes = append(out.Notes, "tasks: "+taskErr.Error())
+	}
+	wantItems := dataset.Events + dataset.Tasks
+	out.Passed = eventErr == nil && taskErr == nil && out.ItemsReturned == wantItems && wallSeconds <= out.ThresholdSeconds
+	out.Notes = append(out.Notes, fmt.Sprintf("events=%d/%d tasks=%d/%d", eventItems, dataset.Events, taskItems, dataset.Tasks))
+	return out
+}
+
+func timedScalePlanning(dbPath string, request runner.PlanningTaskRequest) (runner.PlanningTaskResult, float64, error) {
+	start := time.Now()
+	result, err := runPlanning(dbPath, request)
+	return result, roundSeconds(time.Since(start).Seconds()), err
+}
+
+func traverseScaleList(dbPath string, action string, limit int) (int, int, error) {
+	cursor := ""
+	items := 0
+	pages := 0
+	for {
+		request := runner.PlanningTaskRequest{Action: action, Cursor: cursor, Limit: &limit}
+		result, err := runPlanning(dbPath, request)
+		if err != nil {
+			return items, pages, err
+		}
+		if result.Rejected {
+			return items, pages, errors.New(result.RejectionReason)
+		}
+		pages++
+		switch action {
+		case runner.PlanningTaskActionListEvents:
+			items += len(result.Events)
+		case runner.PlanningTaskActionListTasks:
+			items += len(result.Tasks)
+		default:
+			return items, pages, fmt.Errorf("unsupported scale list action %q", action)
+		}
+		if result.NextCursor == "" {
+			return items, pages, nil
+		}
+		cursor = result.NextCursor
+		if pages > 100000 {
+			return items, pages, errors.New("pagination did not terminate")
+		}
+	}
+}
+
+func traverseScaleAgendaForCompletions(dbPath string, limit int) (int, int, int, float64, error) {
+	start := time.Now()
+	cursor := ""
+	items := 0
+	pages := 0
+	completedItems := 0
+	for {
+		request := runner.PlanningTaskRequest{
+			Action: runner.PlanningTaskActionListAgenda,
+			From:   "2026-04-01T00:00:00Z",
+			To:     "2026-04-04T00:00:00Z",
+			Cursor: cursor,
+			Limit:  &limit,
+		}
+		result, err := runPlanning(dbPath, request)
+		if err != nil {
+			return items, pages, completedItems, roundSeconds(time.Since(start).Seconds()), err
+		}
+		if result.Rejected {
+			return items, pages, completedItems, roundSeconds(time.Since(start).Seconds()), errors.New(result.RejectionReason)
+		}
+		pages++
+		items += len(result.Agenda)
+		for _, item := range result.Agenda {
+			if item.CompletedAt != "" {
+				completedItems++
+			}
+		}
+		if completedItems > 0 || result.NextCursor == "" {
+			return items, pages, completedItems, roundSeconds(time.Since(start).Seconds()), nil
+		}
+		cursor = result.NextCursor
+		if pages > 100000 {
+			return items, pages, completedItems, roundSeconds(time.Since(start).Seconds()), errors.New("agenda pagination did not terminate")
+		}
+	}
+}
+
+func baseScaleResult(scenario string, description string, dataset scaleDataset, thresholdSeconds float64, wallSeconds float64) scaleResult {
+	return scaleResult{
+		Scenario:         scenario,
+		Description:      description,
+		Calendars:        dataset.Calendars,
+		Events:           dataset.Events,
+		Tasks:            dataset.Tasks,
+		RecurrenceRules:  dataset.RecurrenceRules,
+		CompletionRows:   dataset.CompletionRows,
+		WallSeconds:      wallSeconds,
+		ThresholdSeconds: thresholdSeconds,
+	}
+}
+
+func scaleResultsPassed(results []scaleResult) bool {
+	for _, result := range results {
+		if !result.Passed {
+			return false
+		}
+	}
+	return true
+}
+
+func failedScaleResults(results []scaleResult) []scaleResult {
+	failures := []scaleResult{}
+	for _, result := range results {
+		if !result.Passed {
+			failures = append(failures, result)
+		}
+	}
+	return failures
+}
+
+func createScaleBlockerIssues(repoRoot string, failures []scaleResult) ([]string, error) {
+	ids := []string{}
+	for _, failure := range failures {
+		title := fmt.Sprintf("Investigate OpenPlanner scale eval failure: %s", failure.Scenario)
+		description := fmt.Sprintf(
+			"Scale eval `%s` exceeded or failed the local maintainer gate.\n\nDataset: %d events, %d tasks, %d recurrence rules, %d completion rows.\nWall time: %.2fs. Threshold: %.2fs.\nNotes: %s.\n\nCreated from `%s`.",
+			failure.Scenario,
+			failure.Events,
+			failure.Tasks,
+			failure.RecurrenceRules,
+			failure.CompletionRows,
+			failure.WallSeconds,
+			failure.ThresholdSeconds,
+			strings.Join(failure.Notes, "; "),
+			scaleIssueID,
+		)
+		cmd := exec.Command("bd", "create", "--silent", "--title", title, "--description", description, "--type", "task", "--priority", "2")
+		cmd.Dir = repoRoot
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return ids, fmt.Errorf("bd create: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		id := firstBeadsID(string(output))
+		if id == "" {
+			return ids, errors.New("bd create returned empty issue id")
+		}
+		dep := exec.Command("bd", "dep", "add", "op-2vv", id)
+		dep.Dir = repoRoot
+		if output, err := dep.CombinedOutput(); err != nil {
+			return ids, fmt.Errorf("bd dep add op-2vv %s: %w: %s", id, err, strings.TrimSpace(string(output)))
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func firstBeadsID(output string) string {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "op-") {
+			return strings.Trim(field, ".,:;")
+		}
+	}
+	return ""
 }
 
 func runScenarioTurn(runRepo string, runDir string, dbPath string, currentScenario scenario, turn scenarioTurn, turnIndex int, sessionID string, cache cacheConfig) (turnResult, parsedTurn, error) {
@@ -2417,6 +3079,57 @@ func writeMarkdown(path string, value report) error {
 			fmt.Fprintf(&b, "- `production/%s` turn %d: exit `%d`, tools `%d`, assistant calls `%d`, wall `%.2f`, raw `%s`.\n",
 				result.Scenario, turn.Index, turn.ExitCode, turn.Metrics.ToolCalls, turn.Metrics.AssistantCalls, turn.WallSeconds, turn.RawLogArtifactReference)
 		}
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func writeScaleMarkdown(path string, value scaleReport) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# OpenPlanner Scale Eval %s\n\n", value.Date)
+	fmt.Fprintf(&b, "- Issue: `%s`\n", value.Issue)
+	fmt.Fprintf(&b, "- Harness: %s\n", value.Harness)
+	fmt.Fprintf(&b, "- Threshold policy: %s\n", value.ThresholdPolicy)
+	fmt.Fprintf(&b, "- Run root: `%s`\n", value.RunRoot)
+	fmt.Fprintf(&b, "- Database path: `%s`\n", value.DatabasePath)
+	fmt.Fprintf(&b, "- Harness wall seconds: `%.2f`\n", value.HarnessWallSeconds)
+	fmt.Fprintf(&b, "- Scale score: `%s`\n", passFail(value.Passed))
+	fmt.Fprintf(&b, "- Raw artifacts: %s\n", value.RawArtifactsNote)
+	if len(value.BlockerIssues) > 0 {
+		fmt.Fprintf(&b, "- Blocker issues: `%s`\n", strings.Join(value.BlockerIssues, "`, `"))
+	}
+
+	b.WriteString("\n## Dataset\n\n")
+	b.WriteString("| Calendars | Events | Tasks | Recurring Events | Recurring Tasks | Recurrence Rules | Completion Rows | Agenda Range Days | Limit |\n")
+	b.WriteString("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+		value.Dataset.Calendars,
+		value.Dataset.Events,
+		value.Dataset.Tasks,
+		value.Dataset.RecurringEvents,
+		value.Dataset.RecurringTasks,
+		value.Dataset.RecurrenceRules,
+		value.Dataset.CompletionRows,
+		value.Dataset.AgendaRangeDays,
+		value.Dataset.Limit,
+	)
+
+	b.WriteString("\n## Results\n\n")
+	b.WriteString("| Scenario | Passed | Wall Seconds | Threshold Seconds | Items Returned | Pages | Events | Tasks | Recurrence Rules | Completion Rows | Notes |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	for _, result := range value.Results {
+		fmt.Fprintf(&b, "| `%s` | %t | %.2f | %.2f | %d | %d | %d | %d | %d | %d | %s |\n",
+			result.Scenario,
+			result.Passed,
+			result.WallSeconds,
+			result.ThresholdSeconds,
+			result.ItemsReturned,
+			result.PagesTraversed,
+			result.Events,
+			result.Tasks,
+			result.RecurrenceRules,
+			result.CompletionRows,
+			escapeMarkdownTable(strings.Join(result.Notes, "; ")),
+		)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

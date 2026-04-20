@@ -1,0 +1,89 @@
+{
+  "issue": "op-2vv.3",
+  "date": "2026-04-20",
+  "harness": "go runner scale eval using runner.RunPlanningTask against an isolated SQLite database",
+  "threshold_policy": "local maintainer thresholds; failures create beads blockers but thresholds are not portable CI guarantees",
+  "run_root": "\u003crun-root\u003e",
+  "database_path": "\u003crun-root\u003e/scale/openplanner.db",
+  "dataset": {
+    "calendars": 2,
+    "events": 1200,
+    "tasks": 1200,
+    "recurring_events": 200,
+    "recurring_tasks": 200,
+    "recurrence_rules": 400,
+    "completion_rows": 500,
+    "agenda_range_days": 30,
+    "limit": 50
+  },
+  "harness_wall_seconds": 2.55,
+  "passed": true,
+  "results": [
+    {
+      "scenario": "large-agenda-window",
+      "description": "bounded agenda generation over a mixed large local dataset",
+      "calendars": 2,
+      "events": 1200,
+      "tasks": 1200,
+      "recurrence_rules": 400,
+      "completion_rows": 500,
+      "items_returned": 50,
+      "pages_traversed": 1,
+      "wall_seconds": 0.02,
+      "threshold_seconds": 5,
+      "passed": true
+    },
+    {
+      "scenario": "recurring-event-expansion",
+      "description": "agenda probe that expands recurring timed and all-day events",
+      "calendars": 2,
+      "events": 1200,
+      "tasks": 1200,
+      "recurrence_rules": 400,
+      "completion_rows": 500,
+      "items_returned": 300,
+      "pages_traversed": 6,
+      "wall_seconds": 0.13,
+      "threshold_seconds": 3,
+      "passed": true,
+      "notes": [
+        "timed recurring event items observed: 7; all-day recurring event items observed: 67"
+      ]
+    },
+    {
+      "scenario": "recurring-task-completion-lookup",
+      "description": "agenda probe that loads recurring task completion rows",
+      "calendars": 2,
+      "events": 1200,
+      "tasks": 1200,
+      "recurrence_rules": 400,
+      "completion_rows": 500,
+      "items_returned": 200,
+      "pages_traversed": 1,
+      "wall_seconds": 0.01,
+      "threshold_seconds": 5,
+      "passed": true,
+      "notes": [
+        "completed agenda items observed: 116"
+      ]
+    },
+    {
+      "scenario": "list-pagination",
+      "description": "full cursor traversal for event and task list actions",
+      "calendars": 2,
+      "events": 1200,
+      "tasks": 1200,
+      "recurrence_rules": 400,
+      "completion_rows": 500,
+      "items_returned": 2400,
+      "pages_traversed": 48,
+      "wall_seconds": 0.18,
+      "threshold_seconds": 3,
+      "passed": true,
+      "notes": [
+        "events=1200/1200 tasks=1200/1200"
+      ]
+    }
+  ],
+  "raw_artifacts_note": "Raw scale database and transient artifacts were retained under \u003crun-root\u003e/scale during execution and intentionally not committed."
+}

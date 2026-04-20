@@ -63,6 +63,29 @@ The harness runs independent scenario jobs with `--parallel 4` by default. Use
 `--parallel 1` when serial execution is needed for debugging or manual log
 comparison.
 
+## Scale Evals
+
+OpenPlanner also has a deterministic maintainer scale eval for the JSON runner.
+It does not run an LLM session. It seeds an isolated SQLite database through
+`runner.RunPlanningTask`, evaluates runner actions through that same runner
+entrypoint, and writes reduced reports with `<run-root>` placeholders:
+
+```bash
+go run ./scripts/agent-eval/openplanner scale --date 2026-04-20
+```
+
+Use the scale eval before performance-sensitive agenda, recurrence, completion,
+or pagination work. Optional knobs are `--run-root`, `--events`, `--tasks`,
+`--recurring`, `--completions`, and `--limit`. Defaults seed two calendars,
+1,000 one-off events, 1,000 one-off tasks, 200 recurring events, 200 recurring
+tasks, 500 recurring task completions, a 30-day agenda window, and a list limit
+of 50.
+
+Scale reports should include dataset size, wall time, local maintainer
+thresholds, pass/fail status, and any blocker issues created for failed
+thresholds. The thresholds are not portable CI guarantees; they are explicit
+local gates for spotting regressions and filing follow-up optimization work.
+
 ## Metrics
 
 Reports should include:
