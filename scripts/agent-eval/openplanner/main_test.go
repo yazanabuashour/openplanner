@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yazanabuashour/openplanner/internal/runner"
 )
 
 func TestParseRunOptionsDefaultsAndValidation(t *testing.T) {
@@ -177,15 +179,146 @@ func TestAggregateMetricsAndProductionScore(t *testing.T) {
 			EventTypeCounts:      map[string]int{},
 		},
 	}
-	score := productionScoreFor([]runResult{valid, invalid})
+	selected := []scenario{
+		{ID: "create-dated-task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported},
+		{ID: "ambiguous-short-date", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported},
+	}
+	score := productionScoreFor([]runResult{valid, invalid}, selected, true)
 	if !score.Passed {
 		t.Fatalf("score should pass: %#v", score)
 	}
 
 	invalid.Metrics.CommandExecutions = 1
-	score = productionScoreFor([]runResult{valid, invalid})
+	score = productionScoreFor([]runResult{valid, invalid}, selected, true)
 	if score.Passed {
 		t.Fatalf("score should fail when invalid scenario uses commands: %#v", score)
+	}
+}
+
+func TestScenarioCoverageFullAndFiltered(t *testing.T) {
+	t.Parallel()
+
+	full := scenarioCoverageFor([]scenario{
+		{ID: "routine", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported},
+		{ID: "update", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported},
+		{ID: "recurrence", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported},
+		{ID: "migration", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported},
+		{ID: "multi", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported},
+		{ID: "future", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded},
+	}, false)
+	for _, coverage := range full {
+		if coverage.Required && !coverage.Passed {
+			t.Fatalf("required full coverage failed: %#v", coverage)
+		}
+	}
+
+	filtered := scenarioCoverageFor([]scenario{{ID: "update", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported}}, true)
+	for _, coverage := range filtered {
+		if !coverage.Passed || !strings.Contains(coverage.Details, "filtered run") {
+			t.Fatalf("filtered coverage should pass with filtered details: %#v", coverage)
+		}
+	}
+}
+
+func TestEvalBootstrapInstructionsDoNotDuplicateTaskPolicy(t *testing.T) {
+	t.Parallel()
+
+	content := evalBootstrapInstructions()
+	if !strings.Contains(content, ".agents/skills/openplanner/SKILL.md") {
+		t.Fatalf("bootstrap content missing production skill path: %s", content)
+	}
+	for _, forbidden := range []string{"openplanner planning", `"action"`, "YYYY-MM-DD", "RFC3339", "recurrence"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("bootstrap content contains duplicated task policy %q: %s", forbidden, content)
+		}
+	}
+}
+
+func TestUnsupportedWorkflowScoring(t *testing.T) {
+	t.Parallel()
+
+	input := 100
+	cached := 40
+	nonCached := 60
+	output := 20
+	result := runResult{
+		Scenario: "unsupported-delete",
+		Passed:   true,
+		Metrics: metrics{
+			AssistantCalls:       1,
+			UsageExposed:         true,
+			InputTokens:          &input,
+			CachedInputTokens:    &cached,
+			NonCachedInputTokens: &nonCached,
+			OutputTokens:         &output,
+			EventTypeCounts:      map[string]int{},
+		},
+	}
+	selected := []scenario{{ID: "unsupported-delete", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded}}
+	score := productionScoreFor([]runResult{result}, selected, true)
+	if !score.Passed {
+		t.Fatalf("unsupported workflow score should pass: %#v", score)
+	}
+
+	result.Metrics.ToolCalls = 1
+	score = productionScoreFor([]runResult{result}, selected, true)
+	if !score.Passed {
+		t.Fatalf("unsupported workflow score should not fail solely because the agent inspected the production skill: %#v", score)
+	}
+}
+
+func TestVerifyUnsupportedWorkflowRequiresEveryTopic(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+	partial, err := verifyUnsupportedWorkflow(dbPath, "Import is not supported yet.", nil, []string{"import", "export"})
+	if err != nil {
+		t.Fatalf("verifyUnsupportedWorkflow partial: %v", err)
+	}
+	if partial.Passed || partial.AssistantPass {
+		t.Fatalf("partial unsupported answer passed: %#v", partial)
+	}
+
+	complete, err := verifyUnsupportedWorkflow(dbPath, "Import and export are not supported yet.", nil, []string{"import", "export"})
+	if err != nil {
+		t.Fatalf("verifyUnsupportedWorkflow complete: %v", err)
+	}
+	if !complete.Passed {
+		t.Fatalf("complete unsupported answer failed: %#v", complete)
+	}
+}
+
+func TestVerifyNoWorkCopyClarificationRejectsExtraCopy(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "openplanner.db")
+	if err := seedLegacyMigrationData(dbPath); err != nil {
+		t.Fatalf("seedLegacyMigrationData: %v", err)
+	}
+
+	clarification, err := verifyNoWorkCopyClarification(dbPath, "Which destination calendar should I use?")
+	if err != nil {
+		t.Fatalf("verifyNoWorkCopyClarification clean: %v", err)
+	}
+	if !clarification.Passed {
+		t.Fatalf("clean clarification failed: %#v", clarification)
+	}
+
+	if err := runSeedRequests(dbPath, []runner.PlanningTaskRequest{{
+		Action:       runner.PlanningTaskActionCreateTask,
+		CalendarName: "Personal",
+		Title:        "Review notes",
+		DueDate:      "2026-04-16",
+	}}); err != nil {
+		t.Fatalf("seed extra copy: %v", err)
+	}
+
+	withExtraCopy, err := verifyNoWorkCopyClarification(dbPath, "Which destination calendar should I use?")
+	if err != nil {
+		t.Fatalf("verifyNoWorkCopyClarification extra copy: %v", err)
+	}
+	if withExtraCopy.Passed || withExtraCopy.DatabasePass {
+		t.Fatalf("extra pre-clarification copy passed: %#v", withExtraCopy)
 	}
 }
 
@@ -223,13 +356,16 @@ func TestWriteReportIncludesTimingAndTurnDetails(t *testing.T) {
 			Passed:   true,
 			Criteria: []criterion{{Name: "production_passes_all_scenarios", Passed: true, Details: "ok"}},
 		},
-		PhaseTotals: phaseTimings{AgentRun: 10, CopyRepo: 2, Total: 15},
+		ScenarioCoverage: []scenarioCoverage{{Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Scenarios: []string{"mt-clarify-then-create"}, Required: true, Passed: true, Details: "category present"}},
+		PhaseTotals:      phaseTimings{AgentRun: 10, CopyRepo: 2, Total: 15},
 		Results: []runResult{{
-			Scenario:     "mt-clarify-then-create",
-			Passed:       true,
-			Metrics:      metrics{UsageExposed: true, NonCachedInputTokens: &tokens},
-			Verification: verificationResult{Details: "ok"},
-			Turns:        []turnResult{{Index: 1, ExitCode: 0, WallSeconds: 1.2, RawLogArtifactReference: "<run-root>/production/mt-clarify-then-create/turn-1/events.jsonl"}},
+			Scenario:         "mt-clarify-then-create",
+			ScenarioCategory: scenarioCategoryMultiTurn,
+			FeatureState:     scenarioFeatureSupported,
+			Passed:           true,
+			Metrics:          metrics{UsageExposed: true, NonCachedInputTokens: &tokens},
+			Verification:     verificationResult{Details: "ok"},
+			Turns:            []turnResult{{Index: 1, ExitCode: 0, WallSeconds: 1.2, RawLogArtifactReference: "<run-root>/production/mt-clarify-then-create/turn-1/events.jsonl"}},
 		}},
 		ComparisonStatus: "n/a",
 	}
@@ -241,10 +377,39 @@ func TestWriteReportIncludesTimingAndTurnDetails(t *testing.T) {
 		t.Fatalf("read report: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{"Effective parallel speedup: `2.50x`", "Parallel efficiency: `0.62`", "## Phase Timings", "| agent_run | 10.00 |", "## Turn Details", "turn-1/events.jsonl"} {
+	for _, want := range []string{"Effective parallel speedup: `2.50x`", "Parallel efficiency: `0.62`", "## Scenario Coverage", "## Phase Timings", "| agent_run | 10.00 |", "## Turn Details", "turn-1/events.jsonl"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestCommittedEvalReportsUseNeutralPaths(t *testing.T) {
+	t.Parallel()
+
+	resultsDir := filepath.Join("..", "..", "..", "docs", "agent-eval-results")
+	forbidden := []string{"/Users/", "/home/", "/tmp/", "/var/folders/"}
+	err := filepath.WalkDir(resultsDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || (!strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".json")) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		for _, bad := range forbidden {
+			if strings.Contains(text, bad) {
+				t.Fatalf("%s contains machine-absolute path marker %q", path, bad)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan eval reports: %v", err)
 	}
 }
 

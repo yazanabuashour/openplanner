@@ -32,15 +32,36 @@ const (
 	defaultRunParallelism = 4
 	cacheModeShared       = "shared"
 	cacheModeIsolated     = "isolated"
+
+	scenarioCategoryRoutine               = "routine"
+	scenarioCategoryValidation            = "validation"
+	scenarioCategoryUpdate                = "update"
+	scenarioCategoryAdvancedRecurrence    = "advanced_recurrence"
+	scenarioCategoryMigration             = "migration"
+	scenarioCategoryMultiTurn             = "multi_turn_disambiguation"
+	scenarioCategoryFutureSurface         = "future_surface"
+	scenarioFeatureSupported              = "supported"
+	scenarioFeatureUnsupportedUntilLanded = "unsupported_until_landed"
 )
 
 var prewarmCompilePackages = []string{"./cmd/openplanner", "./internal/runner"}
 
+var requiredFullSuiteCategories = []string{
+	scenarioCategoryRoutine,
+	scenarioCategoryUpdate,
+	scenarioCategoryAdvancedRecurrence,
+	scenarioCategoryMigration,
+	scenarioCategoryMultiTurn,
+	scenarioCategoryFutureSurface,
+}
+
 type scenario struct {
-	ID     string         `json:"id"`
-	Title  string         `json:"title"`
-	Prompt string         `json:"prompt,omitempty"`
-	Turns  []scenarioTurn `json:"turns,omitempty"`
+	ID           string         `json:"id"`
+	Title        string         `json:"title"`
+	Category     string         `json:"category"`
+	FeatureState string         `json:"feature_state"`
+	Prompt       string         `json:"prompt,omitempty"`
+	Turns        []scenarioTurn `json:"turns,omitempty"`
 }
 
 type scenarioTurn struct {
@@ -64,12 +85,22 @@ type report struct {
 	HistoryIsolation      historyIsolationSummary `json:"history_isolation"`
 	CommandTemplate       []string                `json:"command_template"`
 	MetricNotes           []string                `json:"metric_notes,omitempty"`
+	ScenarioCoverage      []scenarioCoverage      `json:"scenario_coverage"`
 	ProductionScore       productionScore         `json:"production_score"`
 	Results               []runResult             `json:"results"`
 	RawLogsCommitted      bool                    `json:"raw_logs_committed"`
 	RawLogsNote           string                  `json:"raw_logs_note"`
 	TokenUsageCaveat      string                  `json:"token_usage_caveat"`
 	ComparisonStatus      string                  `json:"comparison_status"`
+}
+
+type scenarioCoverage struct {
+	Category     string   `json:"category"`
+	FeatureState string   `json:"feature_state"`
+	Scenarios    []string `json:"scenarios"`
+	Required     bool     `json:"required"`
+	Passed       bool     `json:"passed"`
+	Details      string   `json:"details"`
 }
 
 type historyIsolationSummary struct {
@@ -90,6 +121,8 @@ type runResult struct {
 	Variant                 string             `json:"variant"`
 	Scenario                string             `json:"scenario"`
 	ScenarioTitle           string             `json:"scenario_title"`
+	ScenarioCategory        string             `json:"scenario_category"`
+	FeatureState            string             `json:"feature_state"`
 	Passed                  bool               `json:"passed"`
 	ExitCode                int                `json:"exit_code"`
 	WallSeconds             float64            `json:"wall_seconds"`
@@ -160,22 +193,43 @@ type verificationResult struct {
 }
 
 type calendarState struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Color       string `json:"color,omitempty"`
 }
 
 type eventState struct {
-	Title      string `json:"title"`
-	StartAt    string `json:"start_at,omitempty"`
-	StartDate  string `json:"start_date,omitempty"`
-	Recurrence string `json:"recurrence,omitempty"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description,omitempty"`
+	Location          string   `json:"location,omitempty"`
+	LocationCleared   bool     `json:"location_cleared,omitempty"`
+	StartAt           string   `json:"start_at,omitempty"`
+	StartDate         string   `json:"start_date,omitempty"`
+	Recurrence        string   `json:"recurrence,omitempty"`
+	RecurrenceCleared bool     `json:"recurrence_cleared,omitempty"`
+	Interval          int32    `json:"interval,omitempty"`
+	Count             *int32   `json:"count,omitempty"`
+	UntilAt           string   `json:"until_at,omitempty"`
+	UntilDate         string   `json:"until_date,omitempty"`
+	ByWeekday         []string `json:"by_weekday,omitempty"`
+	ByMonthDay        []int32  `json:"by_month_day,omitempty"`
 }
 
 type taskState struct {
-	Title       string `json:"title"`
-	DueAt       string `json:"due_at,omitempty"`
-	DueDate     string `json:"due_date,omitempty"`
-	Recurrence  string `json:"recurrence,omitempty"`
-	CompletedAt string `json:"completed_at,omitempty"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description,omitempty"`
+	DueAt             string   `json:"due_at,omitempty"`
+	DueDate           string   `json:"due_date,omitempty"`
+	DueDateCleared    bool     `json:"due_date_cleared,omitempty"`
+	Recurrence        string   `json:"recurrence,omitempty"`
+	RecurrenceCleared bool     `json:"recurrence_cleared,omitempty"`
+	Interval          int32    `json:"interval,omitempty"`
+	Count             *int32   `json:"count,omitempty"`
+	UntilAt           string   `json:"until_at,omitempty"`
+	UntilDate         string   `json:"until_date,omitempty"`
+	ByWeekday         []string `json:"by_weekday,omitempty"`
+	ByMonthDay        []int32  `json:"by_month_day,omitempty"`
+	CompletedAt       string   `json:"completed_at,omitempty"`
 }
 
 type agendaEntryState struct {
@@ -329,6 +383,7 @@ func runCommand(args []string) {
 	if err != nil {
 		failf("select scenarios: %v", err)
 	}
+	filteredRun := strings.TrimSpace(options.ScenarioFilter) != ""
 	cacheConfig := cacheConfig{Mode: options.CacheMode, RunRoot: runRoot}
 
 	marker := filepath.Join(runRoot, "history-marker")
@@ -409,7 +464,8 @@ func runCommand(args []string) {
 			"multi turn: first turn uses codex exec without --ephemeral; later turns use codex exec -C <run-root>/production/<scenario>/repo --add-dir <writable-eval-roots> resume <thread-id> --json with per-turn logs",
 		},
 		MetricNotes:      metricNotes(results),
-		ProductionScore:  productionScoreFor(results),
+		ScenarioCoverage: scenarioCoverageFor(selectedScenarios, filteredRun),
+		ProductionScore:  productionScoreFor(results, selectedScenarios, filteredRun),
 		Results:          results,
 		RawLogsCommitted: false,
 		RawLogsNote:      "Raw codex exec event logs and stderr files were retained under <run-root> during execution and intentionally not committed.",
@@ -476,10 +532,12 @@ func runEvalJobs(repoRoot string, runRoot string, jobs []evalJob, parallelism in
 
 func harnessErrorResult(sc scenario, err error) runResult {
 	return runResult{
-		Variant:       "production",
-		Scenario:      sc.ID,
-		ScenarioTitle: sc.Title,
-		ExitCode:      -1,
+		Variant:          "production",
+		Scenario:         sc.ID,
+		ScenarioTitle:    sc.Title,
+		ScenarioCategory: scenarioCategory(sc),
+		FeatureState:     scenarioFeatureState(sc),
+		ExitCode:         -1,
 		Verification: verificationResult{
 			Passed:        false,
 			DatabasePass:  false,
@@ -566,6 +624,8 @@ func runOne(repoRoot string, runRoot string, currentScenario scenario, cache cac
 		Variant:                 "production",
 		Scenario:                currentScenario.ID,
 		ScenarioTitle:           currentScenario.Title,
+		ScenarioCategory:        scenarioCategory(currentScenario),
+		FeatureState:            scenarioFeatureState(currentScenario),
 		Passed:                  agentErr == nil && verification.Passed,
 		ExitCode:                exitCode,
 		WallSeconds:             roundSeconds(sumTurnWallSeconds(turnResults)),
@@ -872,33 +932,47 @@ func countMultiTurnPersistedTurns(jobs []evalJob) int {
 
 func scenarios() []scenario {
 	return []scenario{
-		{ID: "ensure-calendar", Title: "Ensure a calendar idempotently", Prompt: "Use the configured local OpenPlanner data path. Ensure a calendar named Personal exists. Then tell me whether the Personal calendar exists."},
-		{ID: "create-timed-event", Title: "Create a timed event", Prompt: "Use the configured local OpenPlanner data path. Add a Work calendar event titled Standup from 2026-04-16T09:00:00Z to 2026-04-16T10:00:00Z. Then tell me what event is stored."},
-		{ID: "create-all-day-event", Title: "Create an all-day event", Prompt: "Use the configured local OpenPlanner data path. Add a Personal all-day event titled Planning day on 2026-04-17. Then tell me what event is stored."},
-		{ID: "create-dated-task", Title: "Create a dated task", Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Review notes due on 2026-04-16. Then tell me what task is stored."},
-		{ID: "create-timed-task", Title: "Create a timed task", Prompt: "Use the configured local OpenPlanner data path. Add a Work task titled Send summary due at 2026-04-16T11:00:00Z. Then tell me what task is stored."},
-		{ID: "create-recurring-event", Title: "Create a recurring event", Prompt: "Use the configured local OpenPlanner data path. Add a Work event titled Daily standup from 2026-04-16T09:00:00Z to 2026-04-16T09:30:00Z recurring daily for 3 occurrences. Then tell me the recurrence stored."},
-		{ID: "create-recurring-task", Title: "Create a recurring task", Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Daily review due on 2026-04-16 recurring daily for 3 occurrences. Then tell me the recurrence stored."},
-		{ID: "agenda-range", Title: "List a bounded agenda range chronologically", Prompt: "Use the configured local OpenPlanner data path. Show my agenda from 2026-04-16T00:00:00Z to 2026-04-17T00:00:00Z. Mention only items in that range, chronologically."},
-		{ID: "list-events-filter-limit", Title: "List events with calendar filter and limit", Prompt: "Use the configured local OpenPlanner data path. List only the first Work calendar event. Do not mention Personal calendar events."},
-		{ID: "list-tasks-filter-limit", Title: "List tasks with calendar filter and limit", Prompt: "Use the configured local OpenPlanner data path. List only the first Personal calendar task. Do not mention Work calendar tasks."},
-		{ID: "complete-task", Title: "Complete a non-recurring task", Prompt: "Use the configured local OpenPlanner data path. Complete the Personal task titled Review notes due on 2026-04-16. Tell me what was completed."},
-		{ID: "complete-recurring-task", Title: "Complete a recurring task occurrence", Prompt: "Use the configured local OpenPlanner data path. Complete the 2026-04-17 occurrence of the Personal recurring task titled Daily review. Tell me what occurrence was completed."},
-		{ID: "mixed-event-task", Title: "Create an event and a task in one user turn", Prompt: "Use the configured local OpenPlanner data path. Add a Work event titled Standup from 2026-04-16T09:00:00Z to 2026-04-16T10:00:00Z and a Personal task titled Review notes due on 2026-04-16. Then tell me both stored items."},
-		{ID: "ambiguous-short-date", Title: "Clarify an ambiguous short date without writing", Prompt: "Please add a local OpenPlanner task titled Review notes due 04/16. There is no year context in this conversation or my request."},
-		{ID: "year-first-slash-date", Title: "Reject a year-first slash date without writing", Prompt: "Please add this local OpenPlanner task exactly as written: Review notes due 2026/04/16. If OpenPlanner requires another date format, reject this request directly without running tools. Do not normalize or rewrite the date."},
-		{ID: "invalid-rfc3339", Title: "Reject an invalid RFC3339 time without writing", Prompt: "Please add a local OpenPlanner event titled Standup exactly as written from 2026-04-16 09:00 to 2026-04-16 10:00. If OpenPlanner requires RFC3339 timed fields, reject this request directly without running tools. Do not normalize or rewrite the times."},
-		{ID: "missing-title", Title: "Reject a missing required title without writing", Prompt: "Please add a local OpenPlanner task due on 2026-04-16, but I do not have a title for it."},
-		{ID: "invalid-range", Title: "Reject an invalid agenda range without writing", Prompt: "Please show my OpenPlanner agenda from 2026-04-18T00:00:00Z to 2026-04-16T00:00:00Z."},
-		{ID: "unsupported-recurrence", Title: "Reject unsupported recurrence without writing", Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 recurring hourly."},
-		{ID: "non-positive-limit", Title: "Reject a non-positive list limit without writing", Prompt: "Please list 0 OpenPlanner tasks."},
-		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Turns: []scenarioTurn{
+		{ID: "ensure-calendar", Title: "Ensure a calendar idempotently", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Ensure a calendar named Personal exists. Then tell me whether the Personal calendar exists."},
+		{ID: "create-timed-event", Title: "Create a timed event", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Work calendar event titled Standup from 2026-04-16T09:00:00Z to 2026-04-16T10:00:00Z. Then tell me what event is stored."},
+		{ID: "create-all-day-event", Title: "Create an all-day event", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal all-day event titled Planning day on 2026-04-17. Then tell me what event is stored."},
+		{ID: "create-dated-task", Title: "Create a dated task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Review notes due on 2026-04-16. Then tell me what task is stored."},
+		{ID: "create-timed-task", Title: "Create a timed task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Work task titled Send summary due at 2026-04-16T11:00:00Z. Then tell me what task is stored."},
+		{ID: "create-recurring-event", Title: "Create a recurring event", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Work event titled Daily standup from 2026-04-16T09:00:00Z to 2026-04-16T09:30:00Z recurring daily for 3 occurrences. Then tell me the recurrence stored."},
+		{ID: "create-recurring-task", Title: "Create a recurring task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Daily review due on 2026-04-16 recurring daily for 3 occurrences. Then tell me the recurrence stored."},
+		{ID: "agenda-range", Title: "List a bounded agenda range chronologically", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Show my agenda from 2026-04-16T00:00:00Z to 2026-04-17T00:00:00Z. Mention only items in that range, chronologically."},
+		{ID: "list-events-filter-limit", Title: "List events with calendar filter and limit", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List only the first Work calendar event. Do not mention Personal calendar events."},
+		{ID: "list-tasks-filter-limit", Title: "List tasks with calendar filter and limit", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List only the first Personal calendar task. Do not mention Work calendar tasks."},
+		{ID: "complete-task", Title: "Complete a non-recurring task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the Personal task titled Review notes due on 2026-04-16. Tell me what was completed."},
+		{ID: "complete-recurring-task", Title: "Complete a recurring task occurrence", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the 2026-04-17 occurrence of the Personal recurring task titled Daily review. Tell me what occurrence was completed."},
+		{ID: "mixed-event-task", Title: "Create an event and a task in one user turn", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Work event titled Standup from 2026-04-16T09:00:00Z to 2026-04-16T10:00:00Z and a Personal task titled Review notes due on 2026-04-16. Then tell me both stored items."},
+		{ID: "ambiguous-short-date", Title: "Clarify an ambiguous short date without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due 04/16. There is no year context in this conversation or my request."},
+		{ID: "year-first-slash-date", Title: "Reject a year-first slash date without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add this local OpenPlanner task exactly as written: Review notes due 2026/04/16. If OpenPlanner requires another date format, reject this request directly without running tools. Do not normalize or rewrite the date."},
+		{ID: "invalid-rfc3339", Title: "Reject an invalid RFC3339 time without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner event titled Standup exactly as written from 2026-04-16 09:00 to 2026-04-16 10:00. If OpenPlanner requires RFC3339 timed fields, reject this request directly without running tools. Do not normalize or rewrite the times."},
+		{ID: "missing-title", Title: "Reject a missing required title without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task due on 2026-04-16, but I do not have a title for it."},
+		{ID: "invalid-range", Title: "Reject an invalid agenda range without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please show my OpenPlanner agenda from 2026-04-18T00:00:00Z to 2026-04-16T00:00:00Z."},
+		{ID: "unsupported-recurrence", Title: "Reject unsupported recurrence without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 recurring hourly."},
+		{ID: "non-positive-limit", Title: "Reject a non-positive list limit without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please list 0 OpenPlanner tasks."},
+		{ID: "update-calendar-metadata", Title: "Update calendar metadata", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Ensure a Work calendar exists, set its description to Delivery planning and its color to #2563EB, then tell me what calendar metadata is stored."},
+		{ID: "update-event-patch-clear", Title: "Clear optional event fields with patch semantics", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Find the Work event titled Planning sync, clear its location and recurrence, preserve its title and time, then tell me what changed."},
+		{ID: "update-task-due-mode", Title: "Convert a dated task to a timed task", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Find the Personal task titled Review notes and change it from due on 2026-04-16 to due at 2026-04-16T11:00:00Z, clearing the date-only due date. Then tell me what task is stored."},
+		{ID: "weekly-recurrence-by-weekday", Title: "Create weekly recurrence by weekday", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Water plants due on 2026-04-13 recurring weekly on Monday and Wednesday for 4 occurrences. Then tell me the recurrence stored."},
+		{ID: "monthly-recurrence-by-month-day", Title: "Create monthly recurrence by month day", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Pay rent due on 2026-01-31 recurring monthly on the 31st for 3 occurrences. Then tell me the recurrence stored."},
+		{ID: "migration-style-copy", Title: "Copy selected source calendar data into a destination calendar", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Copy the Legacy calendar items titled Team sync and Review notes into the Work calendar, leaving the Legacy items in place. Then tell me what was copied."},
+		{ID: "unsupported-import-export", Title: "Reject import/export before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please export my local OpenPlanner calendar to an iCalendar .ics file and import an iCalendar file into OpenPlanner. If the production OpenPlanner skill does not support import or export yet, say that directly without switching interfaces."},
+		{ID: "unsupported-delete", Title: "Reject delete before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please delete the Personal OpenPlanner task titled Old note. If the production OpenPlanner skill does not support delete yet, say that directly without switching interfaces."},
+		{ID: "unsupported-reminder", Title: "Reject reminders before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Take medicine due on 2026-04-16 with a reminder one hour before. If reminders are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
+		{ID: "unsupported-task-metadata", Title: "Reject task metadata before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. If priority, status, or tags are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
+		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
 			{Prompt: "Please add a local OpenPlanner Personal task titled Review notes due 04/16. There is no year context in this conversation or my request."},
 			{Prompt: "Use 2026 as the year for that Personal task."},
 		}},
-		{ID: "mt-list-then-complete", Title: "List a task, then complete it in a resumed turn", Turns: []scenarioTurn{
+		{ID: "mt-list-then-complete", Title: "List a task, then complete it in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
 			{Prompt: "Use the configured local OpenPlanner data path. What Personal tasks are due on 2026-04-16? Mention only the matching task."},
 			{Prompt: "Complete the task you just found and tell me what was completed."},
+		}},
+		{ID: "mt-disambiguate-calendar", Title: "Clarify destination calendar before copying", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
+			{Prompt: "Use the configured local OpenPlanner data path. Copy the task Review notes from the Legacy calendar, but I have not said which destination calendar to use."},
+			{Prompt: "Use Work as the destination calendar."},
 		}},
 	}
 }
@@ -912,6 +986,23 @@ func scenarioTurns(sc scenario) []scenarioTurn {
 
 func isMultiTurnScenario(sc scenario) bool {
 	return len(scenarioTurns(sc)) > 1
+}
+
+func scenarioCategory(sc scenario) string {
+	if strings.TrimSpace(sc.Category) != "" {
+		return sc.Category
+	}
+	if isMultiTurnScenario(sc) {
+		return scenarioCategoryMultiTurn
+	}
+	return scenarioCategoryRoutine
+}
+
+func scenarioFeatureState(sc scenario) string {
+	if strings.TrimSpace(sc.FeatureState) != "" {
+		return sc.FeatureState
+	}
+	return scenarioFeatureSupported
 }
 
 func selectScenarios(filter string) ([]scenario, error) {
@@ -961,6 +1052,12 @@ func seedScenario(dbPath string, sc scenario) error {
 		return seedReviewTask(dbPath)
 	case "complete-recurring-task":
 		return seedRecurringTask(dbPath)
+	case "update-event-patch-clear":
+		return seedPatchableEvent(dbPath)
+	case "update-task-due-mode":
+		return seedDatedReviewTask(dbPath)
+	case "migration-style-copy", "mt-disambiguate-calendar":
+		return seedLegacyMigrationData(dbPath)
 	default:
 		return nil
 	}
@@ -994,6 +1091,36 @@ func seedRecurringTask(dbPath string) error {
 	count := int32(3)
 	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
 		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Daily review", DueDate: "2026-04-16", Recurrence: &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count}},
+	})
+}
+
+func seedPatchableEvent(dbPath string) error {
+	count := int32(2)
+	location := "Room 2"
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{
+			Action:       runner.PlanningTaskActionCreateEvent,
+			CalendarName: "Work",
+			Title:        "Planning sync",
+			Location:     &location,
+			StartAt:      "2026-04-16T15:00:00Z",
+			EndAt:        "2026-04-16T16:00:00Z",
+			Recurrence:   &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+		},
+	})
+}
+
+func seedDatedReviewTask(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Review notes", DueDate: "2026-04-16"},
+	})
+}
+
+func seedLegacyMigrationData(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Legacy", Title: "Team sync", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T09:30:00Z"},
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Legacy", Title: "Review notes", DueDate: "2026-04-16"},
+		{Action: runner.PlanningTaskActionEnsureCalendar, CalendarName: "Work"},
 	})
 }
 
@@ -1042,6 +1169,34 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 			return eventCheck, err
 		}
 		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes", DueDate: "2026-04-16"}}, nil, false)
+	case "update-calendar-metadata":
+		return verifyCalendarDetails(dbPath, finalMessage, calendarState{Name: "Work", Description: "Delivery planning", Color: "#2563EB"})
+	case "update-event-patch-clear":
+		return verifyEvents(dbPath, finalMessage, []eventState{{Title: "Planning sync", StartAt: "2026-04-16T15:00:00Z", LocationCleared: true, RecurrenceCleared: true}}, nil)
+	case "update-task-due-mode":
+		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes", DueAt: "2026-04-16T11:00:00Z", DueDateCleared: true}}, nil, false)
+	case "weekly-recurrence-by-weekday":
+		taskCheck, err := verifyTasks(dbPath, finalMessage, []taskState{{Title: "Water plants", DueDate: "2026-04-13", Recurrence: "weekly", Count: int32Ptr(4), ByWeekday: []string{"MO", "WE"}}}, nil, false)
+		if err != nil || !taskCheck.Passed {
+			return taskCheck, err
+		}
+		return verifyAgendaOccurrences(dbPath, finalMessage, "Water plants", []string{"2026-04-13", "2026-04-15", "2026-04-20", "2026-04-22"}, nil)
+	case "monthly-recurrence-by-month-day":
+		taskCheck, err := verifyTasks(dbPath, finalMessage, []taskState{{Title: "Pay rent", DueDate: "2026-01-31", Recurrence: "monthly", Count: int32Ptr(3), ByMonthDay: []int32{31}}}, nil, false)
+		if err != nil || !taskCheck.Passed {
+			return taskCheck, err
+		}
+		return verifyAgendaOccurrences(dbPath, finalMessage, "Pay rent", []string{"2026-01-31", "2026-03-31"}, []string{"2026-02-28"})
+	case "migration-style-copy":
+		return verifyMigrationCopy(dbPath, finalMessage)
+	case "unsupported-import-export":
+		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "export", "icalendar", "ics"})
+	case "unsupported-delete":
+		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"delete"})
+	case "unsupported-reminder":
+		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"reminder"})
+	case "unsupported-task-metadata":
+		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"priority", "status", "tags"})
 	case "ambiguous-short-date":
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"year"})
 	case "year-first-slash-date":
@@ -1066,6 +1221,11 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 			return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes"}}, []string{"Work backlog"}, false)
 		}
 		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes"}}, nil, true)
+	case "mt-disambiguate-calendar":
+		if turnIndex == 1 {
+			return verifyNoWorkCopyClarification(dbPath, finalMessage)
+		}
+		return verifyMigrationTaskCopy(dbPath, finalMessage)
 	default:
 		return verificationResult{Passed: false, DatabasePass: false, AssistantPass: false, Details: "unknown scenario"}, nil
 	}
@@ -1084,6 +1244,41 @@ func verifyCalendar(dbPath string, name string, finalMessage string) (verificati
 		AssistantPass: assistantPass,
 		Details:       passDetails(databasePass, assistantPass, "expected calendar in DB and final answer"),
 		Calendars:     []calendarState{{Name: name}},
+	}, nil
+}
+
+func verifyCalendarDetails(dbPath string, finalMessage string, expected calendarState) (verificationResult, error) {
+	calendars, err := listCalendars(dbPath)
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := false
+	for _, calendar := range calendars {
+		if calendar.Name != expected.Name {
+			continue
+		}
+		if expected.Description != "" && (calendar.Description == nil || *calendar.Description != expected.Description) {
+			continue
+		}
+		if expected.Color != "" && (calendar.Color == nil || *calendar.Color != expected.Color) {
+			continue
+		}
+		databasePass = true
+		break
+	}
+	assistantPass := mentionsAll(finalMessage, expected.Name)
+	if expected.Description != "" {
+		assistantPass = assistantPass && mentionsAll(finalMessage, expected.Description)
+	}
+	if expected.Color != "" {
+		assistantPass = assistantPass && mentionsAll(finalMessage, expected.Color)
+	}
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected calendar metadata in DB and final answer"),
+		Calendars:     []calendarState{expected},
 	}, nil
 }
 
@@ -1134,14 +1329,25 @@ func verifyEvents(dbPath string, finalMessage string, expected []eventState, for
 	}, nil
 }
 
+func listEventsForCalendar(dbPath string, calendarName string) ([]runner.EventEntry, error) {
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListEvents, CalendarName: calendarName, Limit: intPtr(100)})
+	if err != nil {
+		return nil, err
+	}
+	if result.Rejected {
+		return nil, errors.New(result.RejectionReason)
+	}
+	return result.Events, nil
+}
+
 func verifyTasks(dbPath string, finalMessage string, expected []taskState, forbidden []string, requireCompleted bool) (verificationResult, error) {
-	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListTasks, Limit: intPtr(100)})
+	tasks, err := listTasks(dbPath)
 	if err != nil {
 		return verificationResult{}, err
 	}
-	databasePass := !result.Rejected
+	databasePass := true
 	for _, want := range expected {
-		if !taskExists(result.Tasks, want, requireCompleted) {
+		if !taskExists(tasks, want, requireCompleted) {
 			databasePass = false
 		}
 	}
@@ -1153,6 +1359,28 @@ func verifyTasks(dbPath string, finalMessage string, expected []taskState, forbi
 		Details:       passDetails(databasePass, assistantPass, "expected tasks in DB and final answer"),
 		Tasks:         expected,
 	}, nil
+}
+
+func listTasks(dbPath string) ([]runner.TaskEntry, error) {
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListTasks, Limit: intPtr(100)})
+	if err != nil {
+		return nil, err
+	}
+	if result.Rejected {
+		return nil, errors.New(result.RejectionReason)
+	}
+	return result.Tasks, nil
+}
+
+func listTasksForCalendar(dbPath string, calendarName string) ([]runner.TaskEntry, error) {
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionListTasks, CalendarName: calendarName, Limit: intPtr(100)})
+	if err != nil {
+		return nil, err
+	}
+	if result.Rejected {
+		return nil, errors.New(result.RejectionReason)
+	}
+	return result.Tasks, nil
 }
 
 func verifyAgendaRange(dbPath string, finalMessage string) (verificationResult, error) {
@@ -1205,6 +1433,152 @@ func verifyRecurringTaskCompletion(dbPath string, finalMessage string) (verifica
 	}, nil
 }
 
+func verifyAgendaOccurrences(dbPath string, finalMessage string, title string, expectedDates []string, forbiddenDates []string) (verificationResult, error) {
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{
+		Action: runner.PlanningTaskActionListAgenda,
+		From:   "2026-01-01T00:00:00Z",
+		To:     "2026-05-01T00:00:00Z",
+		Limit:  intPtr(100),
+	})
+	if err != nil {
+		return verificationResult{}, err
+	}
+	foundDates := map[string]bool{}
+	for _, item := range result.Agenda {
+		if item.Title == title {
+			if item.DueDate != "" {
+				foundDates[item.DueDate] = true
+			}
+			if item.StartDate != "" {
+				foundDates[item.StartDate] = true
+			}
+			if item.DueAt != "" {
+				foundDates[item.DueAt[:10]] = true
+			}
+			if item.StartAt != "" {
+				foundDates[item.StartAt[:10]] = true
+			}
+		}
+	}
+	databasePass := !result.Rejected
+	for _, date := range expectedDates {
+		if !foundDates[date] {
+			databasePass = false
+		}
+	}
+	for _, date := range forbiddenDates {
+		if foundDates[date] {
+			databasePass = false
+		}
+	}
+	assistantPass := finalMessage != ""
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected recurrence occurrences in agenda"),
+		Agenda:        agendaStatesForDates(title, expectedDates),
+	}, nil
+}
+
+func agendaStatesForDates(title string, dates []string) []agendaEntryState {
+	out := make([]agendaEntryState, 0, len(dates))
+	for _, date := range dates {
+		out = append(out, agendaEntryState{Kind: "task", Title: title, DueDate: date})
+	}
+	return out
+}
+
+func verifyUnsupportedWorkflow(dbPath string, finalMessage string, unsupportedKeywords []string, topicKeywords []string) (verificationResult, error) {
+	unsupportedKeywords = append([]string{"unsupported", "not supported", "not support", "does not support", "doesn't support"}, unsupportedKeywords...)
+	databasePass := !fileExists(dbPath)
+	assistantPass := finalMessage != "" && mentionsAny(finalMessage, unsupportedKeywords) && mentionsAll(finalMessage, topicKeywords...)
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected unsupported-workflow answer without DB writes"),
+	}, nil
+}
+
+func verifyMigrationCopy(dbPath string, finalMessage string) (verificationResult, error) {
+	legacyEvents, err := listEventsForCalendar(dbPath, "Legacy")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	workEvents, err := listEventsForCalendar(dbPath, "Work")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	legacyTasks, err := listTasksForCalendar(dbPath, "Legacy")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	workTasks, err := listTasksForCalendar(dbPath, "Work")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := eventExists(legacyEvents, eventState{Title: "Team sync", StartAt: "2026-04-16T09:00:00Z"}) &&
+		eventExists(workEvents, eventState{Title: "Team sync", StartAt: "2026-04-16T09:00:00Z"}) &&
+		taskExists(legacyTasks, taskState{Title: "Review notes", DueDate: "2026-04-16"}, false) &&
+		taskExists(workTasks, taskState{Title: "Review notes", DueDate: "2026-04-16"}, false)
+	assistantPass := mentionsAll(finalMessage, "Team sync", "Review notes", "Work")
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected copied Work items while Legacy items remain"),
+		Events:        []eventState{{Title: "Team sync", StartAt: "2026-04-16T09:00:00Z"}},
+		Tasks:         []taskState{{Title: "Review notes", DueDate: "2026-04-16"}},
+	}, nil
+}
+
+func verifyNoWorkCopyClarification(dbPath string, finalMessage string) (verificationResult, error) {
+	tasks, err := listTasks(dbPath)
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := countMatchingTasks(tasks, taskState{Title: "Review notes", DueDate: "2026-04-16"}, false) == 1
+	assistantPass := finalMessage != "" && mentionsAny(finalMessage, []string{"destination", "calendar", "which"})
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected clarification before creating destination copy"),
+	}, nil
+}
+
+func countMatchingTasks(tasks []runner.TaskEntry, want taskState, requireCompleted bool) int {
+	count := 0
+	for _, task := range tasks {
+		if taskMatches(task, want, requireCompleted) {
+			count++
+		}
+	}
+	return count
+}
+
+func verifyMigrationTaskCopy(dbPath string, finalMessage string) (verificationResult, error) {
+	legacyTasks, err := listTasksForCalendar(dbPath, "Legacy")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	workTasks, err := listTasksForCalendar(dbPath, "Work")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := taskExists(legacyTasks, taskState{Title: "Review notes", DueDate: "2026-04-16"}, false) &&
+		taskExists(workTasks, taskState{Title: "Review notes", DueDate: "2026-04-16"}, false)
+	assistantPass := mentionsAll(finalMessage, "Review notes", "Work")
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected copied Work task while Legacy task remains"),
+		Tasks:         []taskState{{Title: "Review notes", DueDate: "2026-04-16"}},
+	}, nil
+}
+
 func verifyFinalAnswerOnlyRejection(dbPath string, finalMessage string, anyKeywords []string) (verificationResult, error) {
 	databasePass := !fileExists(dbPath)
 	assistantPass := finalMessage != "" && mentionsAny(finalMessage, anyKeywords)
@@ -1225,13 +1599,25 @@ func eventExists(events []runner.EventEntry, want eventState) bool {
 		if event.Title != want.Title {
 			continue
 		}
+		if want.Description != "" && (event.Description == nil || *event.Description != want.Description) {
+			continue
+		}
+		if want.Location != "" && (event.Location == nil || *event.Location != want.Location) {
+			continue
+		}
+		if want.LocationCleared && event.Location != nil {
+			continue
+		}
 		if want.StartAt != "" && event.StartAt != want.StartAt {
 			continue
 		}
 		if want.StartDate != "" && event.StartDate != want.StartDate {
 			continue
 		}
-		if want.Recurrence != "" && (event.Recurrence == nil || event.Recurrence.Frequency != want.Recurrence) {
+		if want.RecurrenceCleared && event.Recurrence != nil {
+			continue
+		}
+		if !recurrenceMatches(event.Recurrence, want.Recurrence, want.Interval, want.Count, want.UntilAt, want.UntilDate, want.ByWeekday, want.ByMonthDay) {
 			continue
 		}
 		return true
@@ -1241,24 +1627,102 @@ func eventExists(events []runner.EventEntry, want eventState) bool {
 
 func taskExists(tasks []runner.TaskEntry, want taskState, requireCompleted bool) bool {
 	for _, task := range tasks {
-		if task.Title != want.Title {
-			continue
+		if taskMatches(task, want, requireCompleted) {
+			return true
 		}
-		if want.DueAt != "" && task.DueAt != want.DueAt {
-			continue
-		}
-		if want.DueDate != "" && task.DueDate != want.DueDate {
-			continue
-		}
-		if want.Recurrence != "" && (task.Recurrence == nil || task.Recurrence.Frequency != want.Recurrence) {
-			continue
-		}
-		if requireCompleted && task.CompletedAt == "" {
-			continue
-		}
-		return true
 	}
 	return false
+}
+
+func taskMatches(task runner.TaskEntry, want taskState, requireCompleted bool) bool {
+	if task.Title != want.Title {
+		return false
+	}
+	if want.Description != "" && (task.Description == nil || *task.Description != want.Description) {
+		return false
+	}
+	if want.DueAt != "" && task.DueAt != want.DueAt {
+		return false
+	}
+	if want.DueDate != "" && task.DueDate != want.DueDate {
+		return false
+	}
+	if want.DueDateCleared && task.DueDate != "" {
+		return false
+	}
+	if want.RecurrenceCleared && task.Recurrence != nil {
+		return false
+	}
+	if !recurrenceMatches(task.Recurrence, want.Recurrence, want.Interval, want.Count, want.UntilAt, want.UntilDate, want.ByWeekday, want.ByMonthDay) {
+		return false
+	}
+	if requireCompleted && task.CompletedAt == "" {
+		return false
+	}
+	return true
+}
+
+func recurrenceMatches(actual *runner.RecurrenceRuleResult, frequency string, interval int32, count *int32, untilAt string, untilDate string, weekdays []string, monthDays []int32) bool {
+	if frequency == "" && interval == 0 && count == nil && untilAt == "" && untilDate == "" && len(weekdays) == 0 && len(monthDays) == 0 {
+		return true
+	}
+	if actual == nil {
+		return false
+	}
+	if frequency != "" && actual.Frequency != frequency {
+		return false
+	}
+	if interval != 0 && actual.Interval != interval {
+		return false
+	}
+	if count != nil && (actual.Count == nil || *actual.Count != *count) {
+		return false
+	}
+	if untilAt != "" && actual.UntilAt != untilAt {
+		return false
+	}
+	if untilDate != "" && actual.UntilDate != untilDate {
+		return false
+	}
+	if len(weekdays) > 0 && !sameStringSet(actual.ByWeekday, weekdays) {
+		return false
+	}
+	if len(monthDays) > 0 && !sameInt32Set(actual.ByMonthDay, monthDays) {
+		return false
+	}
+	return true
+}
+
+func sameStringSet(got []string, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	gotCopy := append([]string(nil), got...)
+	wantCopy := append([]string(nil), want...)
+	sort.Strings(gotCopy)
+	sort.Strings(wantCopy)
+	for i := range gotCopy {
+		if gotCopy[i] != wantCopy[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameInt32Set(got []int32, want []int32) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	gotCopy := append([]int32(nil), got...)
+	wantCopy := append([]int32(nil), want...)
+	sort.Slice(gotCopy, func(i, j int) bool { return gotCopy[i] < gotCopy[j] })
+	sort.Slice(wantCopy, func(i, j int) bool { return wantCopy[i] < wantCopy[j] })
+	for i := range gotCopy {
+		if gotCopy[i] != wantCopy[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func eventMentionValues(expected []eventState) []string {
@@ -1555,29 +2019,11 @@ func installEvalRunnerAndSkill(runRepo string, runDir string) error {
 		return err
 	}
 
-	content := `# OpenPlanner Eval Instructions
+	return os.WriteFile(filepath.Join(runRepo, "AGENTS.md"), []byte(evalBootstrapInstructions()), 0o644)
+}
 
-For direct local OpenPlanner calendar or task requests, act as a product data agent, not a repo maintainer. Do not run bd prime, inspect source files, inspect the Go module cache, query SQLite directly, or search the repo before the first runner call.
-
-Reject final-answer-only, with exactly one assistant answer and no tools or DB check, for ambiguous short dates with no year, year-first slash dates like 2026/04/16, invalid RFC3339 times, missing required titles, unsupported recurrence values, invalid ranges, or non-positive limits. Do not first announce skill use or process. Never convert a year-first slash date to dashed ISO form; reject it. Never convert an invalid RFC3339 time like 2026-04-16 09:00 to 2026-04-16T09:00:00Z; reject it. 04/16/2026 may become 2026-04-16.
-
-For valid tasks, pipe one JSON request to openplanner planning and answer from JSON only. Use calendar_name for create requests. Use strict YYYY-MM-DD dates for all-day events, date-based tasks, and occurrence dates; use RFC3339 for timed fields and agenda ranges.
-
-Every request JSON must include action. Exact one-line shapes:
-{"action":"ensure_calendar","calendar_name":"Personal"}
-{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z"}
-{"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}
-{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}
-{"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}
-{"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}
-{"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}
-{"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}
-{"action":"list_events","calendar_name":"Work","limit":1}
-{"action":"list_tasks","calendar_name":"Personal","limit":1}
-{"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
-{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
-`
-	return os.WriteFile(filepath.Join(runRepo, "AGENTS.md"), []byte(content), 0o644)
+func evalBootstrapInstructions() string {
+	return "# OpenPlanner Eval Bootstrap\n\nThe production OpenPlanner skill is installed at `.agents/skills/openplanner/SKILL.md`. Use that skill for local OpenPlanner calendar and task requests.\n"
 }
 
 func warmGoModules(runRepo string, runDir string, dbPath string, cache cacheConfig) error {
@@ -1645,7 +2091,7 @@ func sharedEvalPaths(cache cacheConfig) evalPaths {
 	}
 }
 
-func productionScoreFor(results []runResult) productionScore {
+func productionScoreFor(results []runResult, selectedScenarios []scenario, filteredRun bool) productionScore {
 	criteria := []criterion{}
 	total := len(results)
 	passed := countPassed(results)
@@ -1693,6 +2139,19 @@ func productionScoreFor(results []runResult) productionScore {
 		Details: fmt.Sprintf("%d/%d scenarios exposed usage; aggregate non-cached input tokens: %d", tokenScenarios, total, totalNonCached),
 	})
 
+	coverage := scenarioCoverageFor(selectedScenarios, filteredRun)
+	coverageFailures := []string{}
+	for _, current := range coverage {
+		if !current.Passed {
+			coverageFailures = append(coverageFailures, current.Category)
+		}
+	}
+	criteria = append(criteria, criterion{
+		Name:    "expanded_category_coverage",
+		Passed:  len(coverageFailures) == 0,
+		Details: categoryCoverageDetails(coverage, filteredRun),
+	})
+
 	allPassed := true
 	for _, criterion := range criteria {
 		if !criterion.Passed {
@@ -1704,6 +2163,78 @@ func productionScoreFor(results []runResult) productionScore {
 		recommendation = "review_runner_eval_failures_before_recommending"
 	}
 	return productionScore{Recommendation: recommendation, Passed: allPassed, Criteria: criteria}
+}
+
+func scenarioCoverageFor(selectedScenarios []scenario, filteredRun bool) []scenarioCoverage {
+	byCategory := map[string][]scenario{}
+	for _, sc := range selectedScenarios {
+		category := scenarioCategory(sc)
+		byCategory[category] = append(byCategory[category], sc)
+	}
+	seen := map[string]bool{}
+	categories := []string{}
+	for _, category := range requiredFullSuiteCategories {
+		categories = append(categories, category)
+		seen[category] = true
+	}
+	for category := range byCategory {
+		if !seen[category] {
+			categories = append(categories, category)
+		}
+	}
+	sort.Strings(categories)
+
+	out := make([]scenarioCoverage, 0, len(categories))
+	for _, category := range categories {
+		scenarios := byCategory[category]
+		ids := make([]string, 0, len(scenarios))
+		states := map[string]bool{}
+		for _, sc := range scenarios {
+			ids = append(ids, sc.ID)
+			states[scenarioFeatureState(sc)] = true
+		}
+		sort.Strings(ids)
+		required := isRequiredFullSuiteCategory(category)
+		passed := len(ids) > 0 || filteredRun || !required
+		details := "category present"
+		if len(ids) == 0 {
+			details = "category not selected"
+		}
+		if filteredRun {
+			details = "filtered run; full-suite category coverage not enforced"
+			passed = true
+		}
+		out = append(out, scenarioCoverage{
+			Category:     category,
+			FeatureState: featureStateSummary(states),
+			Scenarios:    ids,
+			Required:     required,
+			Passed:       passed,
+			Details:      details,
+		})
+	}
+	return out
+}
+
+func isRequiredFullSuiteCategory(category string) bool {
+	for _, required := range requiredFullSuiteCategories {
+		if category == required {
+			return true
+		}
+	}
+	return false
+}
+
+func featureStateSummary(states map[string]bool) string {
+	if len(states) == 0 {
+		return ""
+	}
+	values := make([]string, 0, len(states))
+	for state := range states {
+		values = append(values, state)
+	}
+	sort.Strings(values)
+	return strings.Join(values, ",")
 }
 
 func metricNotes(results []runResult) []string {
@@ -1764,6 +2295,22 @@ func finalAnswerOnlyDetails(failures []string) string {
 	return fmt.Sprintf("invalid-input scenarios were not final-answer-only: %s", sortedJoin(failures))
 }
 
+func categoryCoverageDetails(coverage []scenarioCoverage, filteredRun bool) string {
+	if filteredRun {
+		return "filtered run; full-suite category coverage not enforced"
+	}
+	missing := []string{}
+	for _, current := range coverage {
+		if current.Required && len(current.Scenarios) == 0 {
+			missing = append(missing, current.Category)
+		}
+	}
+	if len(missing) == 0 {
+		return "expanded production categories covered"
+	}
+	return fmt.Sprintf("missing expanded production categories: %s", sortedJoin(missing))
+}
+
 func forbiddenInspectionDetails(failures []string) string {
 	if len(failures) == 0 {
 		return "no removed-interface path inspection, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
@@ -1808,16 +2355,32 @@ func writeMarkdown(path string, value report) error {
 		fmt.Fprintf(&b, "| `%s` | %t | %s |\n", criterion.Name, criterion.Passed, escapeMarkdownTable(criterion.Details))
 	}
 
+	b.WriteString("\n## Scenario Coverage\n\n")
+	b.WriteString("| Category | Required | Passed | Feature State | Scenarios | Details |\n")
+	b.WriteString("| --- | ---: | ---: | --- | --- | --- |\n")
+	for _, coverage := range value.ScenarioCoverage {
+		fmt.Fprintf(&b, "| `%s` | %t | %t | `%s` | %s | %s |\n",
+			coverage.Category,
+			coverage.Required,
+			coverage.Passed,
+			coverage.FeatureState,
+			escapeMarkdownTable(strings.Join(coverage.Scenarios, ", ")),
+			escapeMarkdownTable(coverage.Details),
+		)
+	}
+
 	b.WriteString("\n## Results\n\n")
-	b.WriteString("| Scenario | Passed | Tools | Commands | Assistant Calls | Non-Cached Tokens | Wall Seconds | Details |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	b.WriteString("| Scenario | Category | Feature State | Passed | Tools | Commands | Assistant Calls | Non-Cached Tokens | Wall Seconds | Details |\n")
+	b.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, result := range value.Results {
 		tokenText := "n/a"
 		if tokens, ok := nonCachedInputTokens(result); ok {
 			tokenText = fmt.Sprintf("%d", tokens)
 		}
-		fmt.Fprintf(&b, "| `%s` | %t | %d | %d | %d | %s | %.2f | %s |\n",
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %t | %d | %d | %d | %s | %.2f | %s |\n",
 			result.Scenario,
+			result.ScenarioCategory,
+			result.FeatureState,
 			result.Passed,
 			result.Metrics.ToolCalls,
 			result.Metrics.CommandExecutions,
@@ -2041,6 +2604,10 @@ func commandExitCode(err error) int {
 }
 
 func intPtr(value int) *int {
+	return &value
+}
+
+func int32Ptr(value int32) *int32 {
 	return &value
 }
 

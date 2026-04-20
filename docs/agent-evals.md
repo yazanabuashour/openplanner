@@ -15,7 +15,7 @@ not a source-checkout helper, public SDK, REST API, hosted service, or web UI.
 
 ## Scenario Coverage
 
-The production matrix covers routine local planning tasks:
+The baseline production gate covers routine local planning tasks:
 
 - calendar ensure and duplicate-calendar avoidance
 - timed and all-day event creation
@@ -29,6 +29,24 @@ The production matrix covers routine local planning tasks:
   invalid RFC3339 values, invalid ranges, unsupported recurrence, missing
   titles, and non-positive limits
 - true multi-turn requests that require clarification or conversational context
+
+The expanded production gate adds:
+
+- update flows for calendar metadata, event patch clearing, and task due-mode
+  changes
+- richer recurrence coverage for weekly `by_weekday` and monthly
+  `by_month_day` schedules
+- migration-style workflows that recreate selected source calendar data through
+  runner actions
+- multi-turn disambiguation that requires a clarification before writing
+- future-surface unsupported gates for import/export, delete, reminders, and
+  task metadata until those JSON runner features land
+
+Unsupported gates become positive gates when their corresponding runner actions
+or fields are implemented. The production skill remains the only model-visible
+task policy; eval bootstrap instructions may point at the installed skill but
+must not duplicate JSON shapes, validation rules, recurrence rules, or runner
+command examples.
 
 Every scenario uses a fresh isolated repo copy, a fresh local database path, and
 reduced JSON/Markdown artifacts. Raw logs are not committed; reduced reports
@@ -76,8 +94,12 @@ SQLite directly, and should not use source-checkout command discovery.
 Production passes only when:
 
 - production passes every selected scenario
+- a full-suite run covers the expanded production categories; filtered smoke
+  runs record category coverage as filtered instead of failing
 - rule-covered invalid-input scenarios are final-answer-only: no tools, no
   command executions, and at most one assistant answer
+- unsupported future-surface scenarios answer without DB writes or fallback
+  interfaces
 - production has no stale removed-interface inspection, module-cache inspection,
   direct SQLite access, source-checkout runner usage, or routine broad repo
   search

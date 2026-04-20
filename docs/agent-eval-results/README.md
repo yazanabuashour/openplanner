@@ -14,5 +14,11 @@ Current recommendation:
 - Keep CLI and human-baseline comparisons `n/a` unless a separate baseline is
   approved.
 
+Expanded production reports use the `op-runner-<date>-expansion` naming pattern
+and should include update, richer recurrence, migration-style, multi-turn
+disambiguation, and future-surface unsupported categories. Filtered smoke
+reports may cover fewer categories when the report marks category coverage as
+filtered.
+
 Historical iteration artifacts should move under
 `docs/agent-eval-results/archive/`.
