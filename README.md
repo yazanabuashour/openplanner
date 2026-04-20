@@ -85,6 +85,9 @@ Supported routine actions are:
 - `update_calendar`
 - `update_event`
 - `update_task`
+- `delete_calendar`
+- `delete_event`
+- `delete_task`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -95,6 +98,11 @@ Update actions use patch semantics: omitted fields are preserved, non-null
 fields are set, and `null` clears clearable optional fields. Use `event_id` for
 `update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
 `calendar_name` for `update_calendar`.
+
+Delete actions use `event_id` for `delete_event`, `task_id` for `delete_task`,
+and exactly one of `calendar_id` or `calendar_name` for `delete_calendar`.
+Calendar deletion is empty-calendar-only and never cascades to contained events
+or tasks.
 
 ## Development
 

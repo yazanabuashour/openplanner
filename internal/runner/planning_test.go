@@ -368,6 +368,154 @@ func TestRunPlanningTaskUpdateActionsAndClearSemantics(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskDeleteEventAndTask(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Old appointment",
+		StartAt:      "2026-04-16T09:00:00Z",
+		EndAt:        "2026-04-16T09:30:00Z",
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Personal",
+		Title:        "Old note",
+		DueDate:      "2026-04-16",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	deletedEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionDeleteEvent,
+		EventID: event.Events[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("delete event: %v", err)
+	}
+	if deletedEvent.Rejected || len(deletedEvent.Writes) != 1 || deletedEvent.Writes[0].Kind != "event" || deletedEvent.Writes[0].Status != "deleted" {
+		t.Fatalf("deleted event result = %#v", deletedEvent)
+	}
+
+	deletedTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionDeleteTask,
+		TaskID: task.Tasks[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	if deletedTask.Rejected || len(deletedTask.Writes) != 1 || deletedTask.Writes[0].Kind != "task" || deletedTask.Writes[0].Status != "deleted" {
+		t.Fatalf("deleted task result = %#v", deletedTask)
+	}
+
+	limit := 100
+	events, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListEvents, Limit: &limit})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if events.Rejected || len(events.Events) != 0 {
+		t.Fatalf("events after delete = %#v, want none", events)
+	}
+	tasks, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListTasks, Limit: &limit})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if tasks.Rejected || len(tasks.Tasks) != 0 {
+		t.Fatalf("tasks after delete = %#v, want none", tasks)
+	}
+}
+
+func TestRunPlanningTaskDeleteEmptyCalendar(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	calendar, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Archive",
+	})
+	if err != nil {
+		t.Fatalf("ensure calendar: %v", err)
+	}
+	if calendar.Rejected || len(calendar.Calendars) != 1 {
+		t.Fatalf("calendar result = %#v", calendar)
+	}
+
+	deleted, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionDeleteCalendar,
+		CalendarName: "Archive",
+	})
+	if err != nil {
+		t.Fatalf("delete calendar: %v", err)
+	}
+	if deleted.Rejected || len(deleted.Writes) != 1 || deleted.Writes[0].Kind != "calendar" || deleted.Writes[0].Status != "deleted" {
+		t.Fatalf("deleted calendar result = %#v", deleted)
+	}
+
+	recreated, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Archive",
+	})
+	if err != nil {
+		t.Fatalf("ensure calendar after delete: %v", err)
+	}
+	if recreated.Rejected || len(recreated.Writes) != 1 || recreated.Writes[0].Status != "created" {
+		t.Fatalf("recreated calendar result = %#v, want created", recreated)
+	}
+}
+
+func TestRunPlanningTaskDeleteNonEmptyCalendarRejects(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	calendar, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Work",
+	})
+	if err != nil {
+		t.Fatalf("ensure calendar: %v", err)
+	}
+	if _, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:     PlanningTaskActionCreateEvent,
+		CalendarID: calendar.Calendars[0].ID,
+		Title:      "Planning",
+		StartDate:  "2026-04-16",
+	}); err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	deleted, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:     PlanningTaskActionDeleteCalendar,
+		CalendarID: calendar.Calendars[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("delete calendar: %v", err)
+	}
+	if !deleted.Rejected || deleted.RejectionReason == "" {
+		t.Fatalf("deleted calendar result = %#v, want rejection", deleted)
+	}
+
+	limit := 100
+	events, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListEvents, CalendarName: "Work", Limit: &limit})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if events.Rejected || len(events.Events) != 1 || events.Events[0].Title != "Planning" {
+		t.Fatalf("events after rejected calendar delete = %#v, want event preserved", events)
+	}
+}
+
 func TestRunPlanningTaskUpdateRejections(t *testing.T) {
 	t.Parallel()
 
@@ -415,6 +563,73 @@ func TestRunPlanningTaskUpdateRejections(t *testing.T) {
 			}
 			if !result.Rejected || result.RejectionReason == "" {
 				t.Fatalf("result = %#v, want rejection", result)
+			}
+		})
+	}
+}
+
+func TestRunPlanningTaskDeleteRejectionsBeforeDatabaseCreation(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	tests := []struct {
+		name    string
+		request PlanningTaskRequest
+	}{
+		{
+			name:    "missing calendar identifier",
+			request: PlanningTaskRequest{Action: PlanningTaskActionDeleteCalendar},
+		},
+		{
+			name: "mixed calendar identifiers",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionDeleteCalendar,
+				CalendarName: "Archive",
+				CalendarID:   "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			},
+		},
+		{
+			name: "invalid calendar id",
+			request: PlanningTaskRequest{
+				Action:     PlanningTaskActionDeleteCalendar,
+				CalendarID: "not-a-ulid",
+			},
+		},
+		{
+			name:    "missing event id",
+			request: PlanningTaskRequest{Action: PlanningTaskActionDeleteEvent},
+		},
+		{
+			name: "invalid event id",
+			request: PlanningTaskRequest{
+				Action:  PlanningTaskActionDeleteEvent,
+				EventID: "not-a-ulid",
+			},
+		},
+		{
+			name:    "missing task id",
+			request: PlanningTaskRequest{Action: PlanningTaskActionDeleteTask},
+		},
+		{
+			name: "invalid task id",
+			request: PlanningTaskRequest{
+				Action: PlanningTaskActionDeleteTask,
+				TaskID: "not-a-ulid",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, test.request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask() error = %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+				t.Fatalf("database directory exists after validation rejection: %v", err)
 			}
 		})
 	}

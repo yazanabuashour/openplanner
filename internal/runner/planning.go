@@ -24,6 +24,9 @@ const (
 	PlanningTaskActionUpdateCalendar = "update_calendar"
 	PlanningTaskActionUpdateEvent    = "update_event"
 	PlanningTaskActionUpdateTask     = "update_task"
+	PlanningTaskActionDeleteCalendar = "delete_calendar"
+	PlanningTaskActionDeleteEvent    = "delete_event"
+	PlanningTaskActionDeleteTask     = "delete_task"
 	PlanningTaskActionListAgenda     = "list_agenda"
 	PlanningTaskActionListEvents     = "list_events"
 	PlanningTaskActionListTasks      = "list_tasks"
@@ -354,6 +357,12 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runUpdateEvent(ctx, api, request)
 	case PlanningTaskActionUpdateTask:
 		return runUpdateTask(ctx, api, request)
+	case PlanningTaskActionDeleteCalendar:
+		return runDeleteCalendar(ctx, api, request)
+	case PlanningTaskActionDeleteEvent:
+		return runDeleteEvent(ctx, api, request)
+	case PlanningTaskActionDeleteTask:
+		return runDeleteTask(ctx, api, request)
 	case PlanningTaskActionListAgenda:
 		return runListAgenda(ctx, api, request)
 	case PlanningTaskActionListEvents:
@@ -502,6 +511,62 @@ func runUpdateTask(ctx context.Context, api *localRuntime, request normalizedPla
 		}},
 		Tasks:   []TaskEntry{taskEntry(updated)},
 		Summary: "updated task",
+	}, nil
+}
+
+func runDeleteCalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	calendarID := request.CalendarID
+	calendarName := request.CalendarName
+	if calendarID == "" {
+		calendar, found, err := findCalendarByName(ctx, api, calendarName)
+		if err != nil {
+			return PlanningTaskResult{}, err
+		}
+		if !found {
+			return rejectedResult(fmt.Sprintf("calendar %q was not found", calendarName)), nil
+		}
+		calendarID = calendar.ID
+		calendarName = calendar.Name
+	}
+	if err := api.DeleteCalendar(ctx, calendarID); err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "calendar",
+			ID:     calendarID,
+			Status: "deleted",
+			Name:   calendarName,
+		}},
+		Summary: "deleted calendar",
+	}, nil
+}
+
+func runDeleteEvent(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	if err := api.DeleteEvent(ctx, request.EventID); err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "event",
+			ID:     request.EventID,
+			Status: "deleted",
+		}},
+		Summary: "deleted event",
+	}, nil
+}
+
+func runDeleteTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	if err := api.DeleteTask(ctx, request.TaskID); err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "task",
+			ID:     request.TaskID,
+			Status: "deleted",
+		}},
+		Summary: "deleted task",
 	}, nil
 }
 
@@ -698,6 +763,34 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		normalized.TaskID = taskID
 		normalized.TaskPatch = patch
 		return normalized, ""
+	case PlanningTaskActionDeleteCalendar:
+		identifier, rejection := normalizeCalendarDeleteInput(request)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.CalendarName = identifier.CalendarName
+		normalized.CalendarID = identifier.CalendarID
+		return normalized, ""
+	case PlanningTaskActionDeleteEvent:
+		eventID := strings.TrimSpace(request.EventID)
+		if eventID == "" {
+			return normalizedPlanningTaskRequest{}, "event_id is required"
+		}
+		if _, err := ulid.ParseStrict(eventID); err != nil {
+			return normalizedPlanningTaskRequest{}, "event_id must be a valid ULID"
+		}
+		normalized.EventID = eventID
+		return normalized, ""
+	case PlanningTaskActionDeleteTask:
+		taskID := strings.TrimSpace(request.TaskID)
+		if taskID == "" {
+			return normalizedPlanningTaskRequest{}, "task_id is required"
+		}
+		if _, err := ulid.ParseStrict(taskID); err != nil {
+			return normalizedPlanningTaskRequest{}, "task_id must be a valid ULID"
+		}
+		normalized.TaskID = taskID
+		return normalized, ""
 	case PlanningTaskActionListAgenda:
 		from, rejection := parseRequiredTime("from", request.From)
 		if rejection != "" {
@@ -803,6 +896,23 @@ func normalizeCalendarPatchInput(request PlanningTaskRequest) (calendarIdentifie
 		return calendarIdentifier{}, domain.CalendarPatch{}, "at least one update field is required"
 	}
 	return calendarIdentifier{CalendarName: name, CalendarID: id}, patch, ""
+}
+
+func normalizeCalendarDeleteInput(request PlanningTaskRequest) (calendarIdentifier, string) {
+	name := strings.TrimSpace(request.CalendarName)
+	id := strings.TrimSpace(request.CalendarID)
+	if name == "" && id == "" {
+		return calendarIdentifier{}, "calendar_name or calendar_id is required"
+	}
+	if name != "" && id != "" {
+		return calendarIdentifier{}, "use calendar_name or calendar_id, not both"
+	}
+	if id != "" {
+		if _, err := ulid.ParseStrict(id); err != nil {
+			return calendarIdentifier{}, "calendar_id must be a valid ULID"
+		}
+	}
+	return calendarIdentifier{CalendarName: name, CalendarID: id}, ""
 }
 
 func normalizeCalendarRef(request PlanningTaskRequest, normalized *normalizedPlanningTaskRequest) string {

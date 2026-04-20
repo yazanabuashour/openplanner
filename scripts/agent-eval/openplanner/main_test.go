@@ -304,7 +304,7 @@ func TestUnsupportedWorkflowScoring(t *testing.T) {
 	nonCached := 60
 	output := 20
 	result := runResult{
-		Scenario: "unsupported-delete",
+		Scenario: "unsupported-reminder",
 		Passed:   true,
 		Metrics: metrics{
 			AssistantCalls:       1,
@@ -316,7 +316,7 @@ func TestUnsupportedWorkflowScoring(t *testing.T) {
 			EventTypeCounts:      map[string]int{},
 		},
 	}
-	selected := []scenario{{ID: "unsupported-delete", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded}}
+	selected := []scenario{{ID: "unsupported-reminder", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded}}
 	score := productionScoreFor([]runResult{result}, selected, true)
 	if !score.Passed {
 		t.Fatalf("unsupported workflow score should pass: %#v", score)
@@ -326,6 +326,81 @@ func TestUnsupportedWorkflowScoring(t *testing.T) {
 	score = productionScoreFor([]runResult{result}, selected, true)
 	if !score.Passed {
 		t.Fatalf("unsupported workflow score should not fail solely because the agent inspected the production skill: %#v", score)
+	}
+}
+
+func TestVerifyDeleteScenarios(t *testing.T) {
+	t.Parallel()
+
+	taskDBPath := filepath.Join(t.TempDir(), "tasks.db")
+	if err := seedDeleteTaskData(taskDBPath); err != nil {
+		t.Fatalf("seedDeleteTaskData: %v", err)
+	}
+	tasks, err := listTasksForCalendar(taskDBPath, "Personal")
+	if err != nil {
+		t.Fatalf("list seeded tasks: %v", err)
+	}
+	var oldTaskID string
+	for _, task := range tasks {
+		if task.Title == "Old note" {
+			oldTaskID = task.ID
+		}
+	}
+	if oldTaskID == "" {
+		t.Fatal("seeded Old note task not found")
+	}
+	if result, err := runPlanning(taskDBPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionDeleteTask, TaskID: oldTaskID}); err != nil || result.Rejected {
+		t.Fatalf("delete seeded task result = %#v, err = %v", result, err)
+	}
+	taskCheck, err := verifyDeletedTask(taskDBPath, "Deleted Old note.")
+	if err != nil {
+		t.Fatalf("verifyDeletedTask: %v", err)
+	}
+	if !taskCheck.Passed {
+		t.Fatalf("deleted task verification failed: %#v", taskCheck)
+	}
+
+	eventDBPath := filepath.Join(t.TempDir(), "events.db")
+	if err := seedDeleteEventData(eventDBPath); err != nil {
+		t.Fatalf("seedDeleteEventData: %v", err)
+	}
+	events, err := listEventsForCalendar(eventDBPath, "Personal")
+	if err != nil {
+		t.Fatalf("list seeded events: %v", err)
+	}
+	var oldEventID string
+	for _, event := range events {
+		if event.Title == "Old appointment" {
+			oldEventID = event.ID
+		}
+	}
+	if oldEventID == "" {
+		t.Fatal("seeded Old appointment event not found")
+	}
+	if result, err := runPlanning(eventDBPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionDeleteEvent, EventID: oldEventID}); err != nil || result.Rejected {
+		t.Fatalf("delete seeded event result = %#v, err = %v", result, err)
+	}
+	eventCheck, err := verifyDeletedEvent(eventDBPath, "Deleted Old appointment.")
+	if err != nil {
+		t.Fatalf("verifyDeletedEvent: %v", err)
+	}
+	if !eventCheck.Passed {
+		t.Fatalf("deleted event verification failed: %#v", eventCheck)
+	}
+
+	calendarDBPath := filepath.Join(t.TempDir(), "calendar.db")
+	if err := seedEmptyArchiveCalendar(calendarDBPath); err != nil {
+		t.Fatalf("seedEmptyArchiveCalendar: %v", err)
+	}
+	if result, err := runPlanning(calendarDBPath, runner.PlanningTaskRequest{Action: runner.PlanningTaskActionDeleteCalendar, CalendarName: "Archive"}); err != nil || result.Rejected {
+		t.Fatalf("delete seeded calendar result = %#v, err = %v", result, err)
+	}
+	calendarCheck, err := verifyDeletedEmptyCalendar(calendarDBPath, "Deleted Archive.")
+	if err != nil {
+		t.Fatalf("verifyDeletedEmptyCalendar: %v", err)
+	}
+	if !calendarCheck.Passed {
+		t.Fatalf("deleted calendar verification failed: %#v", calendarCheck)
 	}
 }
 

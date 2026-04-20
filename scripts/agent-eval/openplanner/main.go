@@ -1606,6 +1606,9 @@ func scenarios() []scenario {
 		{ID: "list-tasks-filter-limit", Title: "List tasks with calendar filter and limit", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List only the first Personal calendar task. Do not mention Work calendar tasks."},
 		{ID: "complete-task", Title: "Complete a non-recurring task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the Personal task titled Review notes due on 2026-04-16. Tell me what was completed."},
 		{ID: "complete-recurring-task", Title: "Complete a recurring task occurrence", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the 2026-04-17 occurrence of the Personal recurring task titled Daily review. Tell me what occurrence was completed."},
+		{ID: "delete-task", Title: "Delete a task by listed ID", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Delete the Personal task titled Old note. Leave the Personal task titled Keep note in place. Tell me what was deleted."},
+		{ID: "delete-event", Title: "Delete an event by listed ID", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Delete the Personal event titled Old appointment. Leave the Personal event titled Keep appointment in place. Tell me what was deleted."},
+		{ID: "delete-empty-calendar", Title: "Delete an empty calendar safely", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Delete the empty Archive calendar. Tell me what calendar was deleted."},
 		{ID: "mixed-event-task", Title: "Create an event and a task in one user turn", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Work event titled Standup from 2026-04-16T09:00:00Z to 2026-04-16T10:00:00Z and a Personal task titled Review notes due on 2026-04-16. Then tell me both stored items."},
 		{ID: "ambiguous-short-date", Title: "Clarify an ambiguous short date without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due 04/16. There is no year context in this conversation or my request."},
 		{ID: "year-first-slash-date", Title: "Reject a year-first slash date without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add this local OpenPlanner task exactly as written: Review notes due 2026/04/16. If OpenPlanner requires another date format, reject this request directly without running tools. Do not normalize or rewrite the date."},
@@ -1621,7 +1624,6 @@ func scenarios() []scenario {
 		{ID: "monthly-recurrence-by-month-day", Title: "Create monthly recurrence by month day", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Pay rent due on 2026-01-31 recurring monthly on the 31st for 3 occurrences. Then tell me the recurrence stored."},
 		{ID: "migration-style-copy", Title: "Copy selected source calendar data into a destination calendar", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Copy the Legacy calendar items titled Team sync and Review notes into the Work calendar, leaving the Legacy items in place. Then tell me what was copied."},
 		{ID: "unsupported-import-export", Title: "Reject import/export before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please export my local OpenPlanner calendar to an iCalendar .ics file and import an iCalendar file into OpenPlanner. If the production OpenPlanner skill does not support import or export yet, say that directly without switching interfaces."},
-		{ID: "unsupported-delete", Title: "Reject delete before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please delete the Personal OpenPlanner task titled Old note. If the production OpenPlanner skill does not support delete yet, say that directly without switching interfaces."},
 		{ID: "unsupported-reminder", Title: "Reject reminders before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Take medicine due on 2026-04-16 with a reminder one hour before. If reminders are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
 		{ID: "unsupported-task-metadata", Title: "Reject task metadata before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. If priority, status, or tags are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
 		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
@@ -1714,6 +1716,12 @@ func seedScenario(dbPath string, sc scenario) error {
 		return seedReviewTask(dbPath)
 	case "complete-recurring-task":
 		return seedRecurringTask(dbPath)
+	case "delete-task":
+		return seedDeleteTaskData(dbPath)
+	case "delete-event":
+		return seedDeleteEventData(dbPath)
+	case "delete-empty-calendar":
+		return seedEmptyArchiveCalendar(dbPath)
 	case "update-event-patch-clear":
 		return seedPatchableEvent(dbPath)
 	case "update-task-due-mode":
@@ -1753,6 +1761,26 @@ func seedRecurringTask(dbPath string) error {
 	count := int32(3)
 	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
 		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Daily review", DueDate: "2026-04-16", Recurrence: &runner.RecurrenceRuleRequest{Frequency: "daily", Count: &count}},
+	})
+}
+
+func seedDeleteTaskData(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Old note", DueDate: "2026-04-16"},
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Keep note", DueDate: "2026-04-16"},
+	})
+}
+
+func seedDeleteEventData(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Personal", Title: "Old appointment", StartAt: "2026-04-16T09:00:00Z", EndAt: "2026-04-16T09:30:00Z"},
+		{Action: runner.PlanningTaskActionCreateEvent, CalendarName: "Personal", Title: "Keep appointment", StartAt: "2026-04-16T10:00:00Z", EndAt: "2026-04-16T10:30:00Z"},
+	})
+}
+
+func seedEmptyArchiveCalendar(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionEnsureCalendar, CalendarName: "Archive"},
 	})
 }
 
@@ -1825,6 +1853,12 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes"}}, nil, true)
 	case "complete-recurring-task":
 		return verifyRecurringTaskCompletion(dbPath, finalMessage)
+	case "delete-task":
+		return verifyDeletedTask(dbPath, finalMessage)
+	case "delete-event":
+		return verifyDeletedEvent(dbPath, finalMessage)
+	case "delete-empty-calendar":
+		return verifyDeletedEmptyCalendar(dbPath, finalMessage)
 	case "mixed-event-task":
 		eventCheck, err := verifyEvents(dbPath, finalMessage, []eventState{{Title: "Standup", StartAt: "2026-04-16T09:00:00Z"}}, nil)
 		if err != nil || !eventCheck.Passed {
@@ -1853,8 +1887,6 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyMigrationCopy(dbPath, finalMessage)
 	case "unsupported-import-export":
 		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "export", "icalendar", "ics"})
-	case "unsupported-delete":
-		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"delete"})
 	case "unsupported-reminder":
 		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"reminder"})
 	case "unsupported-task-metadata":
@@ -2095,6 +2127,59 @@ func verifyRecurringTaskCompletion(dbPath string, finalMessage string) (verifica
 	}, nil
 }
 
+func verifyDeletedTask(dbPath string, finalMessage string) (verificationResult, error) {
+	tasks, err := listTasksForCalendar(dbPath, "Personal")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := countMatchingTasks(tasks, taskState{Title: "Old note", DueDate: "2026-04-16"}, false) == 0 &&
+		countMatchingTasks(tasks, taskState{Title: "Keep note", DueDate: "2026-04-16"}, false) == 1
+	assistantPass := mentionsAll(finalMessage, "Old note") && mentionsAny(finalMessage, []string{"deleted", "removed"})
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected target task deleted while keep task remains"),
+		Tasks:         []taskState{{Title: "Keep note", DueDate: "2026-04-16"}},
+	}, nil
+}
+
+func verifyDeletedEvent(dbPath string, finalMessage string) (verificationResult, error) {
+	events, err := listEventsForCalendar(dbPath, "Personal")
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := countMatchingEvents(events, eventState{Title: "Old appointment", StartAt: "2026-04-16T09:00:00Z"}) == 0 &&
+		countMatchingEvents(events, eventState{Title: "Keep appointment", StartAt: "2026-04-16T10:00:00Z"}) == 1
+	assistantPass := mentionsAll(finalMessage, "Old appointment") && mentionsAny(finalMessage, []string{"deleted", "removed"})
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected target event deleted while keep event remains"),
+		Events:        []eventState{{Title: "Keep appointment", StartAt: "2026-04-16T10:00:00Z"}},
+	}, nil
+}
+
+func verifyDeletedEmptyCalendar(dbPath string, finalMessage string) (verificationResult, error) {
+	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{
+		Action:       runner.PlanningTaskActionEnsureCalendar,
+		CalendarName: "Archive",
+	})
+	if err != nil {
+		return verificationResult{}, err
+	}
+	databasePass := !result.Rejected && len(result.Writes) == 1 && result.Writes[0].Kind == "calendar" && result.Writes[0].Status == "created"
+	assistantPass := mentionsAll(finalMessage, "Archive")
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected empty calendar deleted before verification recreated it"),
+		Calendars:     []calendarState{{Name: "Archive"}},
+	}, nil
+}
+
 func verifyAgendaOccurrences(dbPath string, finalMessage string, title string, expectedDates []string, forbiddenDates []string) (verificationResult, error) {
 	result, err := runPlanning(dbPath, runner.PlanningTaskRequest{
 		Action: runner.PlanningTaskActionListAgenda,
@@ -2214,6 +2299,16 @@ func countMatchingTasks(tasks []runner.TaskEntry, want taskState, requireComplet
 	count := 0
 	for _, task := range tasks {
 		if taskMatches(task, want, requireCompleted) {
+			count++
+		}
+	}
+	return count
+}
+
+func countMatchingEvents(events []runner.EventEntry, want eventState) int {
+	count := 0
+	for _, event := range events {
+		if eventExists([]runner.EventEntry{event}, want) {
 			count++
 		}
 	}

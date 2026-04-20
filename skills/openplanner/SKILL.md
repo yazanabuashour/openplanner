@@ -29,6 +29,9 @@ Supported routine actions are:
 - `update_calendar`
 - `update_event`
 - `update_task`
+- `delete_calendar`
+- `delete_event`
+- `delete_task`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -41,6 +44,13 @@ For updates, use the object ID returned by a prior list/create result, except
 `update_calendar`, which may identify the current calendar by exactly one of
 `calendar_id` or `calendar_name`.
 
+For deletes, use the object ID returned by a prior list/create result for
+events and tasks. If the user identifies an event or task by title, list the
+matching items first, then delete by the returned `event_id` or `task_id`.
+Calendars may be deleted by exactly one of `calendar_id` or `calendar_name`,
+but only when they are empty; calendar deletion never cascades to contained
+events or tasks.
+
 Update payloads use patch semantics. Omit a field to preserve it, send a
 non-null value to set it, and send `null` to clear clearable optional fields.
 Do not use empty strings as clear instructions. Required fields such as event
@@ -48,9 +58,9 @@ and task titles can be changed but cannot be cleared.
 
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
-user explicitly asks for one. Import/export, delete actions, reminders, and
-task priority/status/tags are not supported until the installed JSON runner
-ships those actions or fields.
+user explicitly asks for one. Import/export, reminders, and task
+priority/status/tags are not supported until the installed JSON runner ships
+those actions or fields.
 
 ## Reject Before Tools
 
@@ -101,6 +111,7 @@ Events:
 {"action":"create_event","calendar_name":"Work","title":"Weekly sync","start_at":"2026-04-13T09:00:00Z","end_at":"2026-04-13T09:30:00Z","recurrence":{"frequency":"weekly","by_weekday":["MO","WE"],"count":4}}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}
+{"action":"delete_event","event_id":"<id-from-prior-runner-result>"}
 ```
 
 Tasks:
@@ -113,6 +124,7 @@ Tasks:
 {"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
+{"action":"delete_task","task_id":"<id-from-prior-runner-result>"}
 ```
 
 Lists:
@@ -121,6 +133,13 @@ Lists:
 {"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}
 {"action":"list_events","calendar_name":"Work","limit":1}
 {"action":"list_tasks","calendar_name":"Personal","limit":1}
+```
+
+Deletes:
+
+```json
+{"action":"delete_calendar","calendar_name":"Archive"}
+{"action":"delete_calendar","calendar_id":"<id-from-prior-runner-result>"}
 ```
 
 Use strict `YYYY-MM-DD` date-only values for all-day events, date-based tasks,

@@ -166,6 +166,17 @@ func (runtime *localRuntime) UpdateCalendar(ctx context.Context, id string, patc
 	return service.UpdateCalendar(id, patch)
 }
 
+func (runtime *localRuntime) DeleteCalendar(ctx context.Context, id string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteCalendar(id)
+}
+
 func (runtime *localRuntime) CreateEvent(ctx context.Context, input domain.Event) (domain.Event, error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.Event{}, err
@@ -186,6 +197,17 @@ func (runtime *localRuntime) UpdateEvent(ctx context.Context, id string, patch d
 		return domain.Event{}, err
 	}
 	return service.UpdateEvent(id, patch)
+}
+
+func (runtime *localRuntime) DeleteEvent(ctx context.Context, id string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteEvent(id)
 }
 
 func (runtime *localRuntime) ListEvents(ctx context.Context, params domain.PageParams) (domain.Page[domain.Event], error) {
@@ -230,6 +252,17 @@ func (runtime *localRuntime) UpdateTask(ctx context.Context, id string, patch do
 		return domain.Task{}, err
 	}
 	return service.UpdateTask(id, patch)
+}
+
+func (runtime *localRuntime) DeleteTask(ctx context.Context, id string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteTask(id)
 }
 
 func (runtime *localRuntime) ListTasks(ctx context.Context, params domain.PageParams) (domain.Page[domain.Task], error) {

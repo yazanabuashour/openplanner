@@ -37,7 +37,13 @@ Every request JSON must include `action`. Exact one-line shapes:
 `{"action":"list_events","calendar_name":"Work","limit":1}`;
 `{"action":"list_tasks","calendar_name":"Personal","limit":1}`;
 `{"action":"complete_task","task_id":"<id-from-prior-runner-result>"}`;
-`{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}`.
+`{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}`;
+`{"action":"delete_event","event_id":"<id-from-prior-runner-result>"}`;
+`{"action":"delete_task","task_id":"<id-from-prior-runner-result>"}`;
+`{"action":"delete_calendar","calendar_name":"Archive"}`;
+`{"action":"delete_calendar","calendar_id":"<id-from-prior-runner-result>"}`.
+Use list/create results to obtain event and task IDs before deleting. Calendar
+deletion is empty-calendar-only and never cascades to contained events or tasks.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
