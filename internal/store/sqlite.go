@@ -105,6 +105,36 @@ var migrations = []migration{
 			CREATE INDEX IF NOT EXISTS tasks_calendar_status_priority_idx ON tasks(calendar_id, status, priority, created_at DESC, id DESC);
 		`,
 	},
+	{
+		version: 3,
+		name:    "reminders",
+		sql: `
+			CREATE TABLE IF NOT EXISTS reminders (
+				id TEXT PRIMARY KEY,
+				owner_kind TEXT NOT NULL CHECK (owner_kind IN ('event', 'task')),
+				owner_id TEXT NOT NULL,
+				event_id TEXT REFERENCES events(id) ON DELETE CASCADE,
+				task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+				before_minutes INTEGER NOT NULL CHECK (before_minutes > 0),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				CHECK (
+					(owner_kind = 'event' AND event_id = owner_id AND task_id IS NULL) OR
+					(owner_kind = 'task' AND task_id = owner_id AND event_id IS NULL)
+				),
+				UNIQUE (owner_kind, owner_id, before_minutes)
+			);
+
+			CREATE INDEX IF NOT EXISTS reminders_owner_idx ON reminders(owner_kind, owner_id);
+
+			CREATE TABLE IF NOT EXISTS reminder_dismissals (
+				reminder_id TEXT NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
+				occurrence_key TEXT NOT NULL,
+				dismissed_at TEXT NOT NULL,
+				PRIMARY KEY (reminder_id, occurrence_key)
+			);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -226,7 +256,15 @@ func (store *Store) CreateEvent(event domain.Event) error {
 		return err
 	}
 
-	_, err = store.db.Exec(`
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin create event: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	_, err = tx.Exec(`
 		INSERT INTO events (
 			id, calendar_id, title, description, location,
 			start_at, end_at, start_date, end_date, recurrence_json,
@@ -238,6 +276,13 @@ func (store *Store) CreateEvent(event domain.Event) error {
 		recurrence, formatTime(event.CreatedAt), formatTime(event.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
+	}
+
+	if err := insertReminders(tx, domain.ReminderOwnerKindEvent, event.ID, event.Reminders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create event: %w", err)
 	}
 
 	return nil
@@ -264,7 +309,14 @@ func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 		_ = rows.Close()
 	}()
 
-	return scanEvents(rows)
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.loadEventReminders(events); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (store *Store) GetEvent(id string) (domain.Event, error) {
@@ -284,7 +336,12 @@ func (store *Store) GetEvent(id string) (domain.Event, error) {
 		return domain.Event{}, fmt.Errorf("get event: %w", err)
 	}
 
-	return event, nil
+	events := []domain.Event{event}
+	if err := store.loadEventReminders(events); err != nil {
+		return domain.Event{}, err
+	}
+
+	return events[0], nil
 }
 
 func (store *Store) UpdateEvent(event domain.Event) error {
@@ -293,7 +350,15 @@ func (store *Store) UpdateEvent(event domain.Event) error {
 		return err
 	}
 
-	result, err := store.db.Exec(`
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin update event: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.Exec(`
 		UPDATE events
 		SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?,
 		    start_date = ?, end_date = ?, recurrence_json = ?, updated_at = ?
@@ -307,6 +372,13 @@ func (store *Store) UpdateEvent(event domain.Event) error {
 
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrNotFound
+	}
+
+	if err := replaceRemindersIfChanged(tx, domain.ReminderOwnerKindEvent, event.ID, event.Reminders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update event: %w", err)
 	}
 
 	return nil
@@ -334,7 +406,15 @@ func (store *Store) CreateTask(task domain.Task) error {
 		return err
 	}
 
-	_, err = store.db.Exec(`
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin create task: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	_, err = tx.Exec(`
 		INSERT INTO tasks (
 			id, calendar_id, title, description, due_at, due_date,
 			recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
@@ -344,6 +424,13 @@ func (store *Store) CreateTask(task domain.Task) error {
 		recurrence, task.Priority, task.Status, tagsJSON, nullableTime(task.CompletedAt), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
+	}
+
+	if err := insertReminders(tx, domain.ReminderOwnerKindTask, task.ID, task.Reminders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create task: %w", err)
 	}
 
 	return nil
@@ -386,6 +473,9 @@ func (store *Store) ListTasks(params domain.TaskListParams) ([]domain.Task, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := store.loadTaskReminders(tasks); err != nil {
+		return nil, err
+	}
 	if len(params.Tags) == 0 {
 		return tasks, nil
 	}
@@ -416,7 +506,12 @@ func (store *Store) GetTask(id string) (domain.Task, error) {
 		return domain.Task{}, fmt.Errorf("get task: %w", err)
 	}
 
-	return task, nil
+	tasks := []domain.Task{task}
+	if err := store.loadTaskReminders(tasks); err != nil {
+		return domain.Task{}, err
+	}
+
+	return tasks[0], nil
 }
 
 func (store *Store) UpdateTask(task domain.Task) error {
@@ -429,7 +524,15 @@ func (store *Store) UpdateTask(task domain.Task) error {
 		return err
 	}
 
-	result, err := store.db.Exec(`
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin update task: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	result, err := tx.Exec(`
 		UPDATE tasks
 		SET title = ?, description = ?, due_at = ?, due_date = ?,
 		    recurrence_json = ?, priority = ?, status = ?, tags_json = ?, completed_at = ?, updated_at = ?
@@ -442,6 +545,13 @@ func (store *Store) UpdateTask(task domain.Task) error {
 
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrNotFound
+	}
+
+	if err := replaceRemindersIfChanged(tx, domain.ReminderOwnerKindTask, task.ID, task.Reminders); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update task: %w", err)
 	}
 
 	return nil
@@ -542,6 +652,230 @@ func (store *Store) ListTaskCompletions(taskIDs []string) (map[string]map[string
 	}
 
 	return completions, nil
+}
+
+func (store *Store) GetReminder(id string) (domain.ReminderRule, error) {
+	row := store.db.QueryRow(`
+		SELECT id, before_minutes, created_at, updated_at
+		FROM reminders
+		WHERE id = ?
+	`, id)
+
+	reminder, err := scanReminder(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ReminderRule{}, ErrNotFound
+		}
+
+		return domain.ReminderRule{}, fmt.Errorf("get reminder: %w", err)
+	}
+
+	return reminder, nil
+}
+
+func (store *Store) DismissReminderOccurrence(reminderID string, occurrenceKey string, dismissedAt time.Time) (bool, error) {
+	result, err := store.db.Exec(`
+		INSERT OR IGNORE INTO reminder_dismissals (reminder_id, occurrence_key, dismissed_at)
+		VALUES (?, ?, ?)
+	`, reminderID, occurrenceKey, formatTime(dismissedAt))
+	if err != nil {
+		return false, mapWriteError(err)
+	}
+
+	affected, _ := result.RowsAffected()
+	return affected == 0, nil
+}
+
+func (store *Store) ListReminderDismissals(reminderIDs []string) (map[string]map[string]time.Time, error) {
+	dismissals := make(map[string]map[string]time.Time, len(reminderIDs))
+	if len(reminderIDs) == 0 {
+		return dismissals, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(reminderIDs)), ",")
+	args := make([]any, 0, len(reminderIDs))
+	for _, reminderID := range reminderIDs {
+		args = append(args, reminderID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT reminder_id, occurrence_key, dismissed_at
+		FROM reminder_dismissals
+		WHERE reminder_id IN (`+placeholders+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list reminder dismissals: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var reminderID string
+		var occurrenceKey string
+		var dismissedAt string
+		if err := rows.Scan(&reminderID, &occurrenceKey, &dismissedAt); err != nil {
+			return nil, fmt.Errorf("scan reminder dismissal: %w", err)
+		}
+		if _, ok := dismissals[reminderID]; !ok {
+			dismissals[reminderID] = map[string]time.Time{}
+		}
+		dismissals[reminderID][occurrenceKey] = parseStoredTime(dismissedAt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reminder dismissals: %w", err)
+	}
+
+	return dismissals, nil
+}
+
+func insertReminders(tx *sql.Tx, ownerKind domain.ReminderOwnerKind, ownerID string, reminders []domain.ReminderRule) error {
+	for _, reminder := range reminders {
+		eventID := sql.NullString{}
+		taskID := sql.NullString{}
+		switch ownerKind {
+		case domain.ReminderOwnerKindEvent:
+			eventID = sql.NullString{String: ownerID, Valid: true}
+		case domain.ReminderOwnerKindTask:
+			taskID = sql.NullString{String: ownerID, Valid: true}
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO reminders (
+				id, owner_kind, owner_id, event_id, task_id, before_minutes, created_at, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, reminder.ID, ownerKind, ownerID, eventID, taskID, reminder.BeforeMinutes, formatTime(reminder.CreatedAt), formatTime(reminder.UpdatedAt)); err != nil {
+			return mapWriteError(err)
+		}
+	}
+
+	return nil
+}
+
+func replaceRemindersIfChanged(tx *sql.Tx, ownerKind domain.ReminderOwnerKind, ownerID string, reminders []domain.ReminderRule) error {
+	current, err := listOwnerRemindersTx(tx, ownerKind, ownerID)
+	if err != nil {
+		return err
+	}
+	if remindersEqual(current, reminders) {
+		return nil
+	}
+
+	if _, err := tx.Exec(`
+		DELETE FROM reminders
+		WHERE owner_kind = ? AND owner_id = ?
+	`, ownerKind, ownerID); err != nil {
+		return fmt.Errorf("delete owner reminders: %w", err)
+	}
+
+	return insertReminders(tx, ownerKind, ownerID, reminders)
+}
+
+func listOwnerRemindersTx(tx *sql.Tx, ownerKind domain.ReminderOwnerKind, ownerID string) ([]domain.ReminderRule, error) {
+	rows, err := tx.Query(`
+		SELECT id, before_minutes, created_at, updated_at
+		FROM reminders
+		WHERE owner_kind = ? AND owner_id = ?
+		ORDER BY before_minutes ASC, id ASC
+	`, ownerKind, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list owner reminders: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	return scanReminders(rows)
+}
+
+func remindersEqual(left []domain.ReminderRule, right []domain.ReminderRule) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID ||
+			left[index].BeforeMinutes != right[index].BeforeMinutes ||
+			!left[index].CreatedAt.Equal(right[index].CreatedAt) ||
+			!left[index].UpdatedAt.Equal(right[index].UpdatedAt) {
+			return false
+		}
+	}
+	return true
+}
+
+func (store *Store) loadEventReminders(events []domain.Event) error {
+	ownerIDs := make([]string, 0, len(events))
+	for _, event := range events {
+		ownerIDs = append(ownerIDs, event.ID)
+	}
+	byOwner, err := store.loadReminders(domain.ReminderOwnerKindEvent, ownerIDs)
+	if err != nil {
+		return err
+	}
+	for index := range events {
+		events[index].Reminders = byOwner[events[index].ID]
+	}
+	return nil
+}
+
+func (store *Store) loadTaskReminders(tasks []domain.Task) error {
+	ownerIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ownerIDs = append(ownerIDs, task.ID)
+	}
+	byOwner, err := store.loadReminders(domain.ReminderOwnerKindTask, ownerIDs)
+	if err != nil {
+		return err
+	}
+	for index := range tasks {
+		tasks[index].Reminders = byOwner[tasks[index].ID]
+	}
+	return nil
+}
+
+func (store *Store) loadReminders(ownerKind domain.ReminderOwnerKind, ownerIDs []string) (map[string][]domain.ReminderRule, error) {
+	byOwner := make(map[string][]domain.ReminderRule, len(ownerIDs))
+	if len(ownerIDs) == 0 {
+		return byOwner, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ownerIDs)), ",")
+	args := make([]any, 0, len(ownerIDs)+1)
+	args = append(args, ownerKind)
+	for _, ownerID := range ownerIDs {
+		args = append(args, ownerID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT owner_id, id, before_minutes, created_at, updated_at
+		FROM reminders
+		WHERE owner_kind = ? AND owner_id IN (`+placeholders+`)
+		ORDER BY owner_id ASC, before_minutes ASC, id ASC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load reminders: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var ownerID string
+		var reminder domain.ReminderRule
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(&ownerID, &reminder.ID, &reminder.BeforeMinutes, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan reminder: %w", err)
+		}
+		reminder.CreatedAt = parseStoredTime(createdAt)
+		reminder.UpdatedAt = parseStoredTime(updatedAt)
+		byOwner[ownerID] = append(byOwner[ownerID], reminder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reminders: %w", err)
+	}
+
+	return byOwner, nil
 }
 
 func (store *Store) migrate() error {
@@ -775,6 +1109,36 @@ func scanTask(scanner interface {
 	task.UpdatedAt = parseStoredTime(updatedAt)
 
 	return task, nil
+}
+
+func scanReminders(rows *sql.Rows) ([]domain.ReminderRule, error) {
+	var reminders []domain.ReminderRule
+	for rows.Next() {
+		reminder, err := scanReminder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan reminder: %w", err)
+		}
+		reminders = append(reminders, reminder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reminders: %w", err)
+	}
+
+	return reminders, nil
+}
+
+func scanReminder(scanner interface {
+	Scan(dest ...any) error
+}) (domain.ReminderRule, error) {
+	var reminder domain.ReminderRule
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(&reminder.ID, &reminder.BeforeMinutes, &createdAt, &updatedAt); err != nil {
+		return domain.ReminderRule{}, err
+	}
+	reminder.CreatedAt = parseStoredTime(createdAt)
+	reminder.UpdatedAt = parseStoredTime(updatedAt)
+	return reminder, nil
 }
 
 func marshalTags(tags []string) (string, error) {

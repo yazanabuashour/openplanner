@@ -1,0 +1,234 @@
+{
+  "issue": "op-runner",
+  "date": "op-2vv.6-2026-04-21-reminders",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "harness": "codex exec --json --full-auto from throwaway run directories; single-turn scenarios use --ephemeral, multi-turn scenarios resume a persisted eval session with explicit writable eval roots",
+  "parallelism": 1,
+  "cache_mode": "shared",
+  "cache_prewarm_seconds": 17.5,
+  "harness_elapsed_seconds": 44.19,
+  "phase_totals": {
+    "copy_repo_seconds": 0.02,
+    "install_variant_seconds": 15.84,
+    "agent_run_seconds": 26.43,
+    "total_seconds": 44.18
+  },
+  "effective_parallel_speedup": 0.6,
+  "parallel_efficiency": 0.6,
+  "codex_version": "codex-cli 0.122.0",
+  "history_isolation": {
+    "status": "passed",
+    "ephemeral_flag_required": true,
+    "run_directory_outside_repo": true,
+    "new_session_files_after_run": 0,
+    "single_turn_ephemeral_runs": 1,
+    "multi_turn_persisted_sessions": 0,
+    "multi_turn_persisted_turns": 0,
+    "openplanner_workspace_used": false,
+    "desktop_app_used": false,
+    "verification_method": "Single-turn scenarios use codex exec --ephemeral from \u003crun-root\u003e/production/\u003cscenario\u003e/repo. Multi-turn scenarios create one persisted Codex exec session per scenario and resume it for later turns; all raw logs stay under \u003crun-root\u003e."
+  },
+  "command_template": [
+    "OPENPLANNER_DATABASE_PATH=\u003crun-root\u003e/production/\u003cscenario\u003e/repo/openplanner.db",
+    "GOCACHE=\u003crun-root\u003e/shared-cache/gocache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gocache",
+    "GOMODCACHE=\u003crun-root\u003e/shared-cache/gomodcache when --cache-mode shared; otherwise \u003crun-root\u003e/production/\u003cscenario\u003e/gomodcache",
+    "single turn: codex exec --json --ephemeral --full-auto --skip-git-repo-check --add-dir \u003crun-root\u003e/production/\u003cscenario\u003e --add-dir \u003crun-root\u003e/shared-cache when --cache-mode shared -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo -m gpt-5.4-mini -c model_reasoning_effort=\"medium\" -c shell_environment_policy.inherit=all \u003cnatural user prompt\u003e",
+    "multi turn: first turn uses codex exec without --ephemeral; later turns use codex exec -C \u003crun-root\u003e/production/\u003cscenario\u003e/repo --add-dir \u003cwritable-eval-roots\u003e resume \u003cthread-id\u003e --json with per-turn logs"
+  ],
+  "metric_notes": [
+    "production total tools: 6",
+    "production total command executions: 6",
+    "non-cached input tokens exposed for 1/1 scenarios; aggregate=11336",
+    "CLI comparison gates are intentionally n/a because OpenPlanner has no human CLI baseline variant."
+  ],
+  "scenario_coverage": [
+    {
+      "category": "advanced_recurrence",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "future_surface",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "migration",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "multi_turn_disambiguation",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "routine",
+      "feature_state": "supported",
+      "scenarios": [
+        "reminder-create-query-dismiss"
+      ],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    },
+    {
+      "category": "update",
+      "feature_state": "",
+      "scenarios": [],
+      "required": true,
+      "passed": true,
+      "details": "filtered run; full-suite category coverage not enforced"
+    }
+  ],
+  "production_score": {
+    "recommendation": "prefer_runner_for_routine_openplanner_operations",
+    "passed": true,
+    "criteria": [
+      {
+        "name": "production_passes_all_scenarios",
+        "passed": true,
+        "details": "1/1 scenarios passed"
+      },
+      {
+        "name": "invalid_inputs_are_final_answer_only",
+        "passed": true,
+        "details": "invalid-input scenarios used no tools, no command executions, and at most one assistant answer"
+      },
+      {
+        "name": "no_forbidden_inspection_or_cli_usage",
+        "passed": true,
+        "details": "no removed-interface path inspection, module-cache inspection, direct SQLite access, CLI usage, or routine broad repo search detected"
+      },
+      {
+        "name": "aggregate_non_cached_tokens_reported",
+        "passed": true,
+        "details": "1/1 scenarios exposed usage; aggregate non-cached input tokens: 11336"
+      },
+      {
+        "name": "expanded_category_coverage",
+        "passed": true,
+        "details": "filtered run; full-suite category coverage not enforced"
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "production",
+      "scenario": "reminder-create-query-dismiss",
+      "scenario_title": "Create, query, and dismiss a reminder",
+      "scenario_category": "routine",
+      "feature_state": "supported",
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 26.43,
+      "phase_timings": {
+        "copy_repo_seconds": 0.02,
+        "install_variant_seconds": 15.84,
+        "agent_run_seconds": 26.43,
+        "total_seconds": 44.18
+      },
+      "metrics": {
+        "assistant_calls": 5,
+        "tool_calls": 6,
+        "command_executions": 6,
+        "file_inspection_commands": 0,
+        "generated_file_inspected": false,
+        "generated_path_from_broad_search": false,
+        "broad_repo_search": false,
+        "module_cache_inspected": false,
+        "cli_used": false,
+        "direct_sqlite_access": false,
+        "usage_exposed": true,
+        "input_tokens": 185544,
+        "cached_input_tokens": 174208,
+        "non_cached_input_tokens": 11336,
+        "output_tokens": 1888,
+        "event_type_counts": {
+          "item.completed": 11,
+          "item.started": 6,
+          "thread.started": 1,
+          "turn.completed": 1,
+          "turn.started": 1
+        },
+        "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+      },
+      "verification": {
+        "passed": true,
+        "database_pass": true,
+        "assistant_pass": true,
+        "details": "turn 1: expected reminder stored, queried, dismissed, and absent from pending range",
+        "tasks": [
+          {
+            "title": "Take medicine",
+            "due_at": "2026-04-16T10:00:00Z"
+          }
+        ]
+      },
+      "turns": [
+        {
+          "turn_index": 1,
+          "wall_seconds": 26.43,
+          "exit_code": 0,
+          "metrics": {
+            "assistant_calls": 5,
+            "tool_calls": 6,
+            "command_executions": 6,
+            "file_inspection_commands": 0,
+            "generated_file_inspected": false,
+            "generated_path_from_broad_search": false,
+            "broad_repo_search": false,
+            "module_cache_inspected": false,
+            "cli_used": false,
+            "direct_sqlite_access": false,
+            "usage_exposed": true,
+            "input_tokens": 185544,
+            "cached_input_tokens": 174208,
+            "non_cached_input_tokens": 11336,
+            "output_tokens": 1888,
+            "event_type_counts": {
+              "item.completed": 11,
+              "item.started": 6,
+              "thread.started": 1,
+              "turn.completed": 1,
+              "turn.started": 1
+            },
+            "command_metric_limitations": "Command/file inspection metrics are inferred from codex exec JSON command events, not from OS-level tracing."
+          },
+          "verification": {
+            "passed": true,
+            "database_pass": true,
+            "assistant_pass": true,
+            "details": "expected reminder stored, queried, dismissed, and absent from pending range",
+            "tasks": [
+              {
+                "title": "Take medicine",
+                "due_at": "2026-04-16T10:00:00Z"
+              }
+            ]
+          },
+          "raw_log_artifact_reference": "\u003crun-root\u003e/production/reminder-create-query-dismiss/turn-1/events.jsonl"
+        }
+      ],
+      "prompt_summary": "create query dismiss reminder",
+      "raw_log_artifact_reference": "\u003crun-root\u003e/production/reminder-create-query-dismiss/turn-1/events.jsonl"
+    }
+  ],
+  "raw_logs_committed": false,
+  "raw_logs_note": "Raw codex exec event logs and stderr files were retained under \u003crun-root\u003e during execution and intentionally not committed.",
+  "token_usage_caveat": "Token metrics come from codex exec turn.completed usage events when exposed; unavailable usage is recorded as not exposed.",
+  "comparison_status": "not applicable: OpenPlanner has no human CLI baseline variant; this report scores the production JSON runner surface only"
+}

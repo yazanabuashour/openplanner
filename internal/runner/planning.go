@@ -19,20 +19,22 @@ import (
 )
 
 const (
-	PlanningTaskActionEnsureCalendar = "ensure_calendar"
-	PlanningTaskActionCreateEvent    = "create_event"
-	PlanningTaskActionCreateTask     = "create_task"
-	PlanningTaskActionUpdateCalendar = "update_calendar"
-	PlanningTaskActionUpdateEvent    = "update_event"
-	PlanningTaskActionUpdateTask     = "update_task"
-	PlanningTaskActionDeleteCalendar = "delete_calendar"
-	PlanningTaskActionDeleteEvent    = "delete_event"
-	PlanningTaskActionDeleteTask     = "delete_task"
-	PlanningTaskActionListAgenda     = "list_agenda"
-	PlanningTaskActionListEvents     = "list_events"
-	PlanningTaskActionListTasks      = "list_tasks"
-	PlanningTaskActionCompleteTask   = "complete_task"
-	PlanningTaskActionValidate       = "validate"
+	PlanningTaskActionEnsureCalendar  = "ensure_calendar"
+	PlanningTaskActionCreateEvent     = "create_event"
+	PlanningTaskActionCreateTask      = "create_task"
+	PlanningTaskActionUpdateCalendar  = "update_calendar"
+	PlanningTaskActionUpdateEvent     = "update_event"
+	PlanningTaskActionUpdateTask      = "update_task"
+	PlanningTaskActionDeleteCalendar  = "delete_calendar"
+	PlanningTaskActionDeleteEvent     = "delete_event"
+	PlanningTaskActionDeleteTask      = "delete_task"
+	PlanningTaskActionListAgenda      = "list_agenda"
+	PlanningTaskActionListEvents      = "list_events"
+	PlanningTaskActionListTasks       = "list_tasks"
+	PlanningTaskActionCompleteTask    = "complete_task"
+	PlanningTaskActionListReminders   = "list_pending_reminders"
+	PlanningTaskActionDismissReminder = "dismiss_reminder"
+	PlanningTaskActionValidate        = "validate"
 )
 
 var (
@@ -41,32 +43,34 @@ var (
 )
 
 type PlanningTaskRequest struct {
-	Action         string                 `json:"action"`
-	CalendarName   string                 `json:"calendar_name,omitempty"`
-	CalendarID     string                 `json:"calendar_id,omitempty"`
-	EventID        string                 `json:"event_id,omitempty"`
-	Name           string                 `json:"name,omitempty"`
-	Description    *string                `json:"description,omitempty"`
-	Color          *string                `json:"color,omitempty"`
-	Title          string                 `json:"title,omitempty"`
-	Location       *string                `json:"location,omitempty"`
-	StartAt        string                 `json:"start_at,omitempty"`
-	EndAt          string                 `json:"end_at,omitempty"`
-	StartDate      string                 `json:"start_date,omitempty"`
-	EndDate        string                 `json:"end_date,omitempty"`
-	DueAt          string                 `json:"due_at,omitempty"`
-	DueDate        string                 `json:"due_date,omitempty"`
-	Recurrence     *RecurrenceRuleRequest `json:"recurrence,omitempty"`
-	Priority       string                 `json:"priority,omitempty"`
-	Status         string                 `json:"status,omitempty"`
-	Tags           []string               `json:"tags,omitempty"`
-	TaskID         string                 `json:"task_id,omitempty"`
-	OccurrenceAt   string                 `json:"occurrence_at,omitempty"`
-	OccurrenceDate string                 `json:"occurrence_date,omitempty"`
-	From           string                 `json:"from,omitempty"`
-	To             string                 `json:"to,omitempty"`
-	Cursor         string                 `json:"cursor,omitempty"`
-	Limit          *int                   `json:"limit,omitempty"`
+	Action               string                 `json:"action"`
+	CalendarName         string                 `json:"calendar_name,omitempty"`
+	CalendarID           string                 `json:"calendar_id,omitempty"`
+	EventID              string                 `json:"event_id,omitempty"`
+	Name                 string                 `json:"name,omitempty"`
+	Description          *string                `json:"description,omitempty"`
+	Color                *string                `json:"color,omitempty"`
+	Title                string                 `json:"title,omitempty"`
+	Location             *string                `json:"location,omitempty"`
+	StartAt              string                 `json:"start_at,omitempty"`
+	EndAt                string                 `json:"end_at,omitempty"`
+	StartDate            string                 `json:"start_date,omitempty"`
+	EndDate              string                 `json:"end_date,omitempty"`
+	DueAt                string                 `json:"due_at,omitempty"`
+	DueDate              string                 `json:"due_date,omitempty"`
+	Recurrence           *RecurrenceRuleRequest `json:"recurrence,omitempty"`
+	Reminders            []ReminderRuleRequest  `json:"reminders,omitempty"`
+	Priority             string                 `json:"priority,omitempty"`
+	Status               string                 `json:"status,omitempty"`
+	Tags                 []string               `json:"tags,omitempty"`
+	TaskID               string                 `json:"task_id,omitempty"`
+	ReminderOccurrenceID string                 `json:"reminder_occurrence_id,omitempty"`
+	OccurrenceAt         string                 `json:"occurrence_at,omitempty"`
+	OccurrenceDate       string                 `json:"occurrence_date,omitempty"`
+	From                 string                 `json:"from,omitempty"`
+	To                   string                 `json:"to,omitempty"`
+	Cursor               string                 `json:"cursor,omitempty"`
+	Limit                *int                   `json:"limit,omitempty"`
 
 	CalendarPatch domain.CalendarPatch `json:"-"`
 	EventPatch    domain.EventPatch    `json:"-"`
@@ -83,6 +87,10 @@ type RecurrenceRuleRequest struct {
 	ByMonthDay []int32  `json:"by_month_day,omitempty"`
 }
 
+type ReminderRuleRequest struct {
+	BeforeMinutes int32 `json:"before_minutes"`
+}
+
 type PlanningTaskResult struct {
 	Rejected        bool            `json:"rejected"`
 	RejectionReason string          `json:"rejection_reason,omitempty"`
@@ -91,6 +99,7 @@ type PlanningTaskResult struct {
 	Events          []EventEntry    `json:"events,omitempty"`
 	Tasks           []TaskEntry     `json:"tasks,omitempty"`
 	Agenda          []AgendaEntry   `json:"agenda,omitempty"`
+	Reminders       []ReminderEntry `json:"reminders,omitempty"`
 	NextCursor      string          `json:"next_cursor,omitempty"`
 	Summary         string          `json:"summary"`
 }
@@ -121,6 +130,7 @@ type EventEntry struct {
 	StartDate   string                `json:"start_date,omitempty"`
 	EndDate     string                `json:"end_date,omitempty"`
 	Recurrence  *RecurrenceRuleResult `json:"recurrence,omitempty"`
+	Reminders   []ReminderRuleEntry   `json:"reminders,omitempty"`
 }
 
 type TaskEntry struct {
@@ -131,6 +141,7 @@ type TaskEntry struct {
 	DueAt       string                `json:"due_at,omitempty"`
 	DueDate     string                `json:"due_date,omitempty"`
 	Recurrence  *RecurrenceRuleResult `json:"recurrence,omitempty"`
+	Reminders   []ReminderRuleEntry   `json:"reminders,omitempty"`
 	Priority    string                `json:"priority"`
 	Status      string                `json:"status"`
 	Tags        []string              `json:"tags"`
@@ -156,6 +167,30 @@ type AgendaEntry struct {
 	CompletedAt   string   `json:"completed_at,omitempty"`
 }
 
+type ReminderRuleEntry struct {
+	ID            string `json:"id"`
+	BeforeMinutes int32  `json:"before_minutes"`
+}
+
+type ReminderEntry struct {
+	ID                   string `json:"id"`
+	ReminderOccurrenceID string `json:"reminder_occurrence_id"`
+	ReminderID           string `json:"reminder_id"`
+	OwnerKind            string `json:"owner_kind"`
+	OwnerID              string `json:"owner_id"`
+	CalendarID           string `json:"calendar_id"`
+	Title                string `json:"title"`
+	OccurrenceKey        string `json:"occurrence_key"`
+	RemindAt             string `json:"remind_at"`
+	BeforeMinutes        int32  `json:"before_minutes"`
+	StartAt              string `json:"start_at,omitempty"`
+	EndAt                string `json:"end_at,omitempty"`
+	StartDate            string `json:"start_date,omitempty"`
+	EndDate              string `json:"end_date,omitempty"`
+	DueAt                string `json:"due_at,omitempty"`
+	DueDate              string `json:"due_date,omitempty"`
+}
+
 type RecurrenceRuleResult struct {
 	Frequency  string   `json:"frequency"`
 	Interval   int32    `json:"interval,omitempty"`
@@ -167,21 +202,23 @@ type RecurrenceRuleResult struct {
 }
 
 type normalizedPlanningTaskRequest struct {
-	Action          string
-	CalendarInput   domain.Calendar
-	CalendarPatch   domain.CalendarPatch
-	CalendarName    string
-	CalendarID      string
-	EventID         string
-	EventInput      domain.Event
-	EventPatch      domain.EventPatch
-	TaskInput       domain.Task
-	TaskPatch       domain.TaskPatch
-	ListOptions     domain.PageParams
-	TaskListOptions domain.TaskListParams
-	AgendaOptions   domain.AgendaParams
-	TaskID          string
-	Completion      domain.TaskCompletionRequest
+	Action               string
+	CalendarInput        domain.Calendar
+	CalendarPatch        domain.CalendarPatch
+	CalendarName         string
+	CalendarID           string
+	EventID              string
+	EventInput           domain.Event
+	EventPatch           domain.EventPatch
+	TaskInput            domain.Task
+	TaskPatch            domain.TaskPatch
+	ListOptions          domain.PageParams
+	TaskListOptions      domain.TaskListParams
+	AgendaOptions        domain.AgendaParams
+	ReminderOptions      domain.ReminderQueryParams
+	TaskID               string
+	ReminderOccurrenceID string
+	Completion           domain.TaskCompletionRequest
 }
 
 func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
@@ -227,32 +264,34 @@ func decodeStrictJSON(content []byte, dest any) error {
 }
 
 var knownPlanningTaskFields = map[string]bool{
-	"action":          true,
-	"calendar_name":   true,
-	"calendar_id":     true,
-	"event_id":        true,
-	"name":            true,
-	"description":     true,
-	"color":           true,
-	"title":           true,
-	"location":        true,
-	"start_at":        true,
-	"end_at":          true,
-	"start_date":      true,
-	"end_date":        true,
-	"due_at":          true,
-	"due_date":        true,
-	"recurrence":      true,
-	"priority":        true,
-	"status":          true,
-	"tags":            true,
-	"task_id":         true,
-	"occurrence_at":   true,
-	"occurrence_date": true,
-	"from":            true,
-	"to":              true,
-	"cursor":          true,
-	"limit":           true,
+	"action":                 true,
+	"calendar_name":          true,
+	"calendar_id":            true,
+	"event_id":               true,
+	"name":                   true,
+	"description":            true,
+	"color":                  true,
+	"title":                  true,
+	"location":               true,
+	"start_at":               true,
+	"end_at":                 true,
+	"start_date":             true,
+	"end_date":               true,
+	"due_at":                 true,
+	"due_date":               true,
+	"recurrence":             true,
+	"reminders":              true,
+	"priority":               true,
+	"status":                 true,
+	"tags":                   true,
+	"task_id":                true,
+	"reminder_occurrence_id": true,
+	"occurrence_at":          true,
+	"occurrence_date":        true,
+	"from":                   true,
+	"to":                     true,
+	"cursor":                 true,
+	"limit":                  true,
 }
 
 func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRequest) {
@@ -268,12 +307,14 @@ func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRe
 	request.EventPatch.StartDate = jsonStringPatch(raw, "start_date")
 	request.EventPatch.EndDate = jsonStringPatch(raw, "end_date")
 	request.EventPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
+	request.EventPatch.Reminders = jsonRemindersPatch(raw, "reminders")
 
 	request.TaskPatch.Title = jsonStringPatch(raw, "title")
 	request.TaskPatch.Description = jsonStringPatch(raw, "description")
 	request.TaskPatch.DueAt = jsonTimePatch(raw, "due_at")
 	request.TaskPatch.DueDate = jsonStringPatch(raw, "due_date")
 	request.TaskPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
+	request.TaskPatch.Reminders = jsonRemindersPatch(raw, "reminders")
 	request.TaskPatch.Priority = jsonTaskPriorityPatch(raw, "priority")
 	request.TaskPatch.Status = jsonTaskStatusPatch(raw, "status")
 	request.TaskPatch.Tags = jsonTagsPatch(raw, "tags")
@@ -330,6 +371,25 @@ func jsonRecurrencePatch(raw map[string]json.RawMessage, key string) domain.Patc
 		return domain.PatchField[domain.RecurrenceRule]{}
 	}
 	return domain.SetPatch(*rule)
+}
+
+func jsonRemindersPatch(raw map[string]json.RawMessage, key string) domain.PatchField[[]domain.ReminderRule] {
+	value, ok := raw[key]
+	if !ok {
+		return domain.PatchField[[]domain.ReminderRule]{}
+	}
+	if isJSONNull(value) {
+		return domain.ClearPatch[[]domain.ReminderRule]()
+	}
+	var request []ReminderRuleRequest
+	if err := json.Unmarshal(value, &request); err != nil {
+		return domain.PatchField[[]domain.ReminderRule]{}
+	}
+	reminders, rejection := normalizeReminders(request)
+	if rejection != "" {
+		return domain.PatchField[[]domain.ReminderRule]{Present: true}
+	}
+	return domain.SetPatch(reminders)
 }
 
 func jsonTaskPriorityPatch(raw map[string]json.RawMessage, key string) domain.PatchField[domain.TaskPriority] {
@@ -436,6 +496,10 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runListTasks(ctx, api, request)
 	case PlanningTaskActionCompleteTask:
 		return runCompleteTask(ctx, api, request)
+	case PlanningTaskActionListReminders:
+		return runListPendingReminders(ctx, api, request)
+	case PlanningTaskActionDismissReminder:
+		return runDismissReminder(ctx, api, request)
 	default:
 		return rejectedResult(fmt.Sprintf("unsupported planning task action %q", request.Action)), nil
 	}
@@ -717,6 +781,51 @@ func runCompleteTask(ctx context.Context, api *localRuntime, request normalizedP
 	}, nil
 }
 
+func runListPendingReminders(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	options := request.ReminderOptions
+	if request.CalendarName != "" {
+		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
+		if err != nil {
+			return PlanningTaskResult{}, err
+		}
+		if !found {
+			return rejectedResult(fmt.Sprintf("calendar %q was not found", request.CalendarName)), nil
+		}
+		options.CalendarID = calendar.ID
+	}
+	page, err := api.ListPendingReminders(ctx, options)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	result := PlanningTaskResult{
+		Reminders: reminderEntries(page.Items),
+		Summary:   fmt.Sprintf("returned %d pending reminders", len(page.Items)),
+	}
+	if page.NextCursor != nil {
+		result.NextCursor = *page.NextCursor
+	}
+	return result, nil
+}
+
+func runDismissReminder(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	dismissal, err := api.DismissReminderOccurrence(ctx, request.ReminderOccurrenceID)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	status := "dismissed"
+	if dismissal.AlreadyDismissed {
+		status = "already_dismissed"
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "reminder_dismissal",
+			ID:     dismissal.ReminderID,
+			Status: status,
+		}},
+		Summary: status + " reminder",
+	}, nil
+}
+
 func resolveWriteCalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (domain.Calendar, *PlanningWrite, error) {
 	if request.CalendarName == "" {
 		calendar, found, err := findCalendarByID(ctx, api, request.CalendarID)
@@ -906,6 +1015,36 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		normalized.TaskID = taskID
 		normalized.Completion = completion
 		return normalized, ""
+	case PlanningTaskActionListReminders:
+		from, rejection := parseRequiredTime("from", request.From)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		to, rejection := parseRequiredTime("to", request.To)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		if !to.After(from) {
+			return normalizedPlanningTaskRequest{}, "to must be after from"
+		}
+		if rejection := normalizeOptionalCalendarFilter(request, &normalized); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.ReminderOptions = domain.ReminderQueryParams{
+			From:       from,
+			To:         to,
+			Cursor:     strings.TrimSpace(request.Cursor),
+			Limit:      limit,
+			CalendarID: normalized.ListOptions.CalendarID,
+		}
+		return normalized, ""
+	case PlanningTaskActionDismissReminder:
+		reminderOccurrenceID := strings.TrimSpace(request.ReminderOccurrenceID)
+		if reminderOccurrenceID == "" {
+			return normalizedPlanningTaskRequest{}, "reminder_occurrence_id is required"
+		}
+		normalized.ReminderOccurrenceID = reminderOccurrenceID
+		return normalized, ""
 	default:
 		return normalizedPlanningTaskRequest{}, fmt.Sprintf("unsupported planning task action %q", action)
 	}
@@ -1070,6 +1209,20 @@ func normalizeEventPatchInput(request PlanningTaskRequest) (domain.EventPatch, s
 			patch.Recurrence = domain.SetPatch(*recurrence)
 		}
 	}
+	if !patch.Reminders.Present && request.Reminders != nil {
+		reminders, rejection := normalizeReminders(request.Reminders)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.Reminders = domain.SetPatch(reminders)
+	}
+	if patch.Reminders.Present && !patch.Reminders.Clear && request.Reminders != nil {
+		reminders, rejection := normalizeReminders(request.Reminders)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.Reminders = domain.SetPatch(reminders)
+	}
 	if patch.Title.Clear {
 		return domain.EventPatch{}, "title cannot be cleared"
 	}
@@ -1114,6 +1267,20 @@ func normalizeTaskPatchInput(request PlanningTaskRequest) (domain.TaskPatch, str
 		if recurrence != nil {
 			patch.Recurrence = domain.SetPatch(*recurrence)
 		}
+	}
+	if !patch.Reminders.Present && request.Reminders != nil {
+		reminders, rejection := normalizeReminders(request.Reminders)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Reminders = domain.SetPatch(reminders)
+	}
+	if patch.Reminders.Present && !patch.Reminders.Clear && request.Reminders != nil {
+		reminders, rejection := normalizeReminders(request.Reminders)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Reminders = domain.SetPatch(reminders)
 	}
 	if !patch.Priority.Present && strings.TrimSpace(request.Priority) != "" {
 		priority, rejection := normalizeTaskPriority(request.Priority)
@@ -1273,6 +1440,10 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 	if rejection != "" {
 		return domain.Event{}, rejection
 	}
+	reminders, rejection := normalizeReminders(request.Reminders)
+	if rejection != "" {
+		return domain.Event{}, rejection
+	}
 	return domain.Event{
 		Title:       title,
 		Description: request.Description,
@@ -1282,6 +1453,7 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 		StartDate:   startDate,
 		EndDate:     endDate,
 		Recurrence:  recurrence,
+		Reminders:   reminders,
 	}, ""
 }
 
@@ -1326,12 +1498,20 @@ func normalizeTaskInput(request PlanningTaskRequest) (domain.Task, string) {
 	if rejection != "" {
 		return domain.Task{}, rejection
 	}
+	reminders, rejection := normalizeReminders(request.Reminders)
+	if rejection != "" {
+		return domain.Task{}, rejection
+	}
+	if len(reminders) > 0 && dueAt == nil && dueDate == nil {
+		return domain.Task{}, "task reminders require due_at or due_date"
+	}
 	return domain.Task{
 		Title:       title,
 		Description: request.Description,
 		DueAt:       dueAt,
 		DueDate:     dueDate,
 		Recurrence:  recurrence,
+		Reminders:   reminders,
 		Priority:    priority,
 		Status:      status,
 		Tags:        tags,
@@ -1492,6 +1672,25 @@ func normalizeTags(values []string) ([]string, string) {
 	return tags, ""
 }
 
+func normalizeReminders(values []ReminderRuleRequest) ([]domain.ReminderRule, string) {
+	if values == nil {
+		return []domain.ReminderRule{}, ""
+	}
+	reminders := make([]domain.ReminderRule, 0, len(values))
+	seen := map[int32]bool{}
+	for _, value := range values {
+		switch {
+		case value.BeforeMinutes <= 0:
+			return nil, "reminders.before_minutes must be greater than 0"
+		case seen[value.BeforeMinutes]:
+			return nil, "reminders cannot contain duplicate before_minutes values"
+		}
+		seen[value.BeforeMinutes] = true
+		reminders = append(reminders, domain.ReminderRule{BeforeMinutes: value.BeforeMinutes})
+	}
+	return reminders, ""
+}
+
 func calendarName(request PlanningTaskRequest) string {
 	if name := strings.TrimSpace(request.CalendarName); name != "" {
 		return name
@@ -1557,7 +1756,8 @@ func eventPatchHasUpdate(patch domain.EventPatch) bool {
 		patch.EndAt.Present ||
 		patch.StartDate.Present ||
 		patch.EndDate.Present ||
-		patch.Recurrence.Present
+		patch.Recurrence.Present ||
+		patch.Reminders.Present
 }
 
 func taskPatchHasUpdate(patch domain.TaskPatch) bool {
@@ -1566,6 +1766,7 @@ func taskPatchHasUpdate(patch domain.TaskPatch) bool {
 		patch.DueAt.Present ||
 		patch.DueDate.Present ||
 		patch.Recurrence.Present ||
+		patch.Reminders.Present ||
 		patch.Priority.Present ||
 		patch.Status.Present ||
 		patch.Tags.Present
@@ -1671,6 +1872,7 @@ func eventEntry(event domain.Event) EventEntry {
 		StartDate:   stringValue(event.StartDate),
 		EndDate:     stringValue(event.EndDate),
 		Recurrence:  recurrenceResult(event.Recurrence),
+		Reminders:   reminderRuleEntries(event.Reminders),
 	}
 	if event.StartAt != nil {
 		out.StartAt = formatJSONTime(*event.StartAt)
@@ -1697,6 +1899,7 @@ func taskEntry(task domain.Task) TaskEntry {
 		Description: cloneString(task.Description),
 		DueDate:     stringValue(task.DueDate),
 		Recurrence:  recurrenceResult(task.Recurrence),
+		Reminders:   reminderRuleEntries(task.Reminders),
 		Priority:    string(task.Priority),
 		Status:      string(task.Status),
 		Tags:        slices.Clone(task.Tags),
@@ -1706,6 +1909,20 @@ func taskEntry(task domain.Task) TaskEntry {
 	}
 	if task.CompletedAt != nil {
 		out.CompletedAt = formatJSONTime(*task.CompletedAt)
+	}
+	return out
+}
+
+func reminderRuleEntries(reminders []domain.ReminderRule) []ReminderRuleEntry {
+	if len(reminders) == 0 {
+		return nil
+	}
+	out := make([]ReminderRuleEntry, 0, len(reminders))
+	for _, reminder := range reminders {
+		out = append(out, ReminderRuleEntry{
+			ID:            reminder.ID,
+			BeforeMinutes: reminder.BeforeMinutes,
+		})
 	}
 	return out
 }
@@ -1738,6 +1955,38 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 		}
 		if item.CompletedAt != nil {
 			entry.CompletedAt = formatJSONTime(*item.CompletedAt)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func reminderEntries(items []domain.PendingReminder) []ReminderEntry {
+	out := make([]ReminderEntry, 0, len(items))
+	for _, item := range items {
+		entry := ReminderEntry{
+			ID:                   item.ID,
+			ReminderOccurrenceID: item.ID,
+			ReminderID:           item.ReminderID,
+			OwnerKind:            string(item.OwnerKind),
+			OwnerID:              item.OwnerID,
+			CalendarID:           item.CalendarID,
+			Title:                item.Title,
+			OccurrenceKey:        item.OccurrenceKey,
+			RemindAt:             formatJSONTime(item.RemindAt),
+			BeforeMinutes:        item.BeforeMinutes,
+			StartDate:            stringValue(item.StartDate),
+			EndDate:              stringValue(item.EndDate),
+			DueDate:              stringValue(item.DueDate),
+		}
+		if item.StartAt != nil {
+			entry.StartAt = formatJSONTime(*item.StartAt)
+		}
+		if item.EndAt != nil {
+			entry.EndAt = formatJSONTime(*item.EndAt)
+		}
+		if item.DueAt != nil {
+			entry.DueAt = formatJSONTime(*item.DueAt)
 		}
 		out = append(out, entry)
 	}

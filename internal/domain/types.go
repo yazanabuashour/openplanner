@@ -88,6 +88,7 @@ type Event struct {
 	StartDate   *string
 	EndDate     *string
 	Recurrence  *RecurrenceRule
+	Reminders   []ReminderRule
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -101,6 +102,7 @@ type EventPatch struct {
 	StartDate   PatchField[string]
 	EndDate     PatchField[string]
 	Recurrence  PatchField[RecurrenceRule]
+	Reminders   PatchField[[]ReminderRule]
 }
 
 type Task struct {
@@ -111,6 +113,7 @@ type Task struct {
 	DueAt       *time.Time
 	DueDate     *string
 	Recurrence  *RecurrenceRule
+	Reminders   []ReminderRule
 	Priority    TaskPriority
 	Status      TaskStatus
 	Tags        []string
@@ -125,9 +128,57 @@ type TaskPatch struct {
 	DueAt       PatchField[time.Time]
 	DueDate     PatchField[string]
 	Recurrence  PatchField[RecurrenceRule]
+	Reminders   PatchField[[]ReminderRule]
 	Priority    PatchField[TaskPriority]
 	Status      PatchField[TaskStatus]
 	Tags        PatchField[[]string]
+}
+
+type ReminderOwnerKind string
+
+const (
+	ReminderOwnerKindEvent ReminderOwnerKind = "event"
+	ReminderOwnerKindTask  ReminderOwnerKind = "task"
+)
+
+type ReminderRule struct {
+	ID            string
+	BeforeMinutes int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type ReminderQueryParams struct {
+	From       time.Time
+	To         time.Time
+	Cursor     string
+	Limit      int
+	CalendarID string
+}
+
+type PendingReminder struct {
+	ID            string
+	ReminderID    string
+	OwnerKind     ReminderOwnerKind
+	OwnerID       string
+	CalendarID    string
+	Title         string
+	OccurrenceKey string
+	RemindAt      time.Time
+	BeforeMinutes int32
+	StartAt       *time.Time
+	EndAt         *time.Time
+	StartDate     *string
+	EndDate       *string
+	DueAt         *time.Time
+	DueDate       *string
+}
+
+type ReminderDismissal struct {
+	ReminderID       string
+	OccurrenceKey    string
+	DismissedAt      time.Time
+	AlreadyDismissed bool
 }
 
 type TaskCompletionRequest struct {

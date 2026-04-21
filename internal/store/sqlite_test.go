@@ -24,11 +24,14 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"events",
 		"events_calendar_idx",
+		"reminder_dismissals",
+		"reminders",
+		"reminders_owner_idx",
 		"schema_migrations",
 		"task_occurrence_states",
 		"tasks",
@@ -55,7 +58,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -128,7 +131,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -151,7 +154,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (3);
+		INSERT INTO schema_migrations (version) VALUES (4);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -164,7 +167,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 3 is newer than supported version 2") {
+	if !strings.Contains(err.Error(), "database schema version 4 is newer than supported version 3") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -194,6 +197,127 @@ func TestOpenBackfillsCompletedLegacyTaskStatus(t *testing.T) {
 	}
 	if tasks[0].Status != domain.TaskStatusDone || tasks[0].Priority != domain.TaskPriorityMedium {
 		t.Fatalf("task metadata = priority:%q status:%q, want medium/done", tasks[0].Priority, tasks[0].Status)
+	}
+}
+
+func TestEventAndTaskRemindersPersistUpdateClearAndCascade(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	calendar := domain.Calendar{ID: "cal-reminders", Name: "Reminders", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(calendar); err != nil {
+		t.Fatalf("CreateCalendar(): %v", err)
+	}
+
+	startAt := time.Date(2026, 4, 21, 9, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(time.Hour)
+	event := domain.Event{
+		ID:         "event-reminders",
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartAt:    &startAt,
+		EndAt:      &endAt,
+		Reminders: []domain.ReminderRule{
+			{ID: "rem-event-60", BeforeMinutes: 60, CreatedAt: now, UpdatedAt: now},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := repository.CreateEvent(event); err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	dueDate := "2026-04-21"
+	task := domain.Task{
+		ID:         "task-reminders",
+		CalendarID: calendar.ID,
+		Title:      "Review",
+		DueDate:    &dueDate,
+		Priority:   domain.TaskPriorityMedium,
+		Status:     domain.TaskStatusTodo,
+		Reminders: []domain.ReminderRule{
+			{ID: "rem-task-30", BeforeMinutes: 30, CreatedAt: now, UpdatedAt: now},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := repository.CreateTask(task); err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+
+	storedEvent, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(): %v", err)
+	}
+	if len(storedEvent.Reminders) != 1 || storedEvent.Reminders[0].ID != "rem-event-60" || storedEvent.Reminders[0].BeforeMinutes != 60 {
+		t.Fatalf("event reminders = %#v, want persisted reminder", storedEvent.Reminders)
+	}
+
+	storedTask, err := repository.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask(): %v", err)
+	}
+	if len(storedTask.Reminders) != 1 || storedTask.Reminders[0].ID != "rem-task-30" || storedTask.Reminders[0].BeforeMinutes != 30 {
+		t.Fatalf("task reminders = %#v, want persisted reminder", storedTask.Reminders)
+	}
+
+	updatedTitle := storedEvent
+	updatedTitle.Title = "Planning updated"
+	updatedTitle.UpdatedAt = now.Add(time.Minute)
+	if err := repository.UpdateEvent(updatedTitle); err != nil {
+		t.Fatalf("UpdateEvent(title): %v", err)
+	}
+	preserved, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(preserved): %v", err)
+	}
+	if len(preserved.Reminders) != 1 || preserved.Reminders[0].ID != "rem-event-60" {
+		t.Fatalf("preserved reminders = %#v, want existing reminder id", preserved.Reminders)
+	}
+
+	replacedTask := storedTask
+	replacedTask.Reminders = []domain.ReminderRule{{ID: "rem-task-90", BeforeMinutes: 90, CreatedAt: now, UpdatedAt: now}}
+	replacedTask.UpdatedAt = now.Add(time.Minute)
+	if err := repository.UpdateTask(replacedTask); err != nil {
+		t.Fatalf("UpdateTask(replace reminder): %v", err)
+	}
+	replaced, err := repository.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask(replaced): %v", err)
+	}
+	if len(replaced.Reminders) != 1 || replaced.Reminders[0].ID != "rem-task-90" || replaced.Reminders[0].BeforeMinutes != 90 {
+		t.Fatalf("replaced reminders = %#v, want replacement", replaced.Reminders)
+	}
+
+	clearedEvent := preserved
+	clearedEvent.Reminders = nil
+	clearedEvent.UpdatedAt = now.Add(2 * time.Minute)
+	if err := repository.UpdateEvent(clearedEvent); err != nil {
+		t.Fatalf("UpdateEvent(clear reminders): %v", err)
+	}
+	cleared, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(cleared): %v", err)
+	}
+	if len(cleared.Reminders) != 0 {
+		t.Fatalf("cleared reminders = %#v, want none", cleared.Reminders)
+	}
+
+	if err := repository.DeleteTask(task.ID); err != nil {
+		t.Fatalf("DeleteTask(): %v", err)
+	}
+	if _, err := repository.GetReminder("rem-task-90"); err != ErrNotFound {
+		t.Fatalf("GetReminder(deleted task reminder) error = %v, want ErrNotFound", err)
 	}
 }
 

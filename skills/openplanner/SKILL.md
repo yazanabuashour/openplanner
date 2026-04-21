@@ -58,13 +58,20 @@ and task titles can be changed but cannot be cleared.
 
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
-user explicitly asks for one. Import/export and reminders are not supported
-until the installed JSON runner ships those actions or fields.
+user explicitly asks for one. Import/export is not supported until the installed
+JSON runner ships those actions or fields.
 
 Tasks support metadata. Use `priority` values `low`, `medium`, or `high`;
 `status` values `todo`, `in_progress`, or `done`; and `tags` as lowercase labels
 containing only letters, digits, `_`, or `-`. Invalid task metadata values should
 be rejected directly before tools.
+
+Events and tasks support relative reminders with `reminders`, an array of
+objects such as `{"before_minutes":60}`. Reminder offsets must be positive and
+cannot be duplicated on one event or task. For pending reminder requests, call
+`list_pending_reminders` with RFC3339 `from` and `to` bounds. To dismiss a
+pending reminder occurrence, call `dismiss_reminder` with the returned
+`reminder_occurrence_id`; repeated dismissals are idempotent.
 
 ## Reject Before Tools
 
@@ -84,6 +91,8 @@ any CLI when the request has:
 | invalid task priority | require `low`, `medium`, or `high` |
 | invalid task status | require `todo`, `in_progress`, or `done` |
 | invalid task tags with spaces or punctuation | require lowercase letters, digits, `_`, or `-` |
+| non-positive reminder offset | require a positive `before_minutes` value |
+| duplicate reminder offsets on one item | require one reminder per offset |
 
 Never convert a year-first slash date to dashed ISO form; reject it. Never
 convert an invalid RFC3339 time like `2026-04-16 09:00` to
@@ -99,8 +108,9 @@ checkout.
 ## Runner Pattern
 
 Pipe one JSON request to `openplanner planning` and answer only from JSON
-`writes`, `calendars`, `events`, `tasks`, `agenda`, or `rejection_reason`.
-Agenda results are already chronologically ordered.
+`writes`, `calendars`, `events`, `tasks`, `agenda`, `reminders`, or
+`rejection_reason`. Agenda results are already chronologically ordered. Pending
+reminder results are already chronologically ordered.
 
 Calendars:
 
@@ -116,8 +126,10 @@ Events:
 {"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}
 {"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}
 {"action":"create_event","calendar_name":"Work","title":"Weekly sync","start_at":"2026-04-13T09:00:00Z","end_at":"2026-04-13T09:30:00Z","recurrence":{"frequency":"weekly","by_weekday":["MO","WE"],"count":4}}
+{"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","reminders":[{"before_minutes":30}]}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}
+{"action":"update_event","event_id":"<id-from-prior-runner-result>","reminders":null}
 {"action":"delete_event","event_id":"<id-from-prior-runner-result>"}
 ```
 
@@ -129,8 +141,10 @@ Tasks:
 {"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16","priority":"high","status":"in_progress","tags":["planning","review"]}
 {"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}
 {"action":"create_task","calendar_name":"Personal","title":"Pay rent","due_date":"2026-01-31","recurrence":{"frequency":"monthly","by_month_day":[31],"count":3}}
+{"action":"create_task","calendar_name":"Personal","title":"Take medicine","due_at":"2026-04-16T10:00:00Z","reminders":[{"before_minutes":60}]}
 {"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}
 {"action":"update_task","task_id":"<id-from-prior-runner-result>","priority":"medium","tags":null}
+{"action":"update_task","task_id":"<id-from-prior-runner-result>","reminders":null}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
 {"action":"delete_task","task_id":"<id-from-prior-runner-result>"}
@@ -143,6 +157,8 @@ Lists:
 {"action":"list_events","calendar_name":"Work","limit":1}
 {"action":"list_tasks","calendar_name":"Personal","limit":1}
 {"action":"list_tasks","calendar_name":"Work","priority":"high","status":"in_progress","tags":["planning","review"],"limit":10}
+{"action":"list_pending_reminders","from":"2026-04-16T08:00:00Z","to":"2026-04-16T10:00:00Z","limit":10}
+{"action":"dismiss_reminder","reminder_occurrence_id":"<id-from-list-pending-reminders-result>"}
 ```
 
 Deletes:

@@ -490,6 +490,250 @@ func TestRunPlanningTaskTaskMetadataRejectionsBeforeDatabaseCreation(t *testing.
 	}
 }
 
+func TestRunPlanningTaskReminderCreateQueryDismissAndClear(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Personal",
+		Title:        "Take medicine",
+		DueAt:        "2026-04-16T10:00:00Z",
+		Reminders:    []ReminderRuleRequest{{BeforeMinutes: 60}},
+	})
+	if err != nil {
+		t.Fatalf("create task reminder: %v", err)
+	}
+	if task.Rejected || len(task.Tasks) != 1 || len(task.Tasks[0].Reminders) != 1 || task.Tasks[0].Reminders[0].BeforeMinutes != 60 {
+		t.Fatalf("task result = %#v, want stored reminder", task)
+	}
+
+	pending, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListReminders,
+		From:   "2026-04-16T08:00:00Z",
+		To:     "2026-04-16T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("list pending reminders: %v", err)
+	}
+	if pending.Rejected || len(pending.Reminders) != 1 {
+		t.Fatalf("pending result = %#v, want one reminder", pending)
+	}
+	if pending.Reminders[0].Title != "Take medicine" || pending.Reminders[0].RemindAt != "2026-04-16T09:00:00Z" || pending.Reminders[0].DueAt != "2026-04-16T10:00:00Z" {
+		t.Fatalf("pending reminder = %#v, want one hour before task due", pending.Reminders[0])
+	}
+	if pending.Reminders[0].ReminderOccurrenceID == "" || pending.Reminders[0].ReminderOccurrenceID != pending.Reminders[0].ID {
+		t.Fatalf("pending reminder occurrence id = %#v, want documented occurrence id", pending.Reminders[0])
+	}
+
+	dismissed, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:               PlanningTaskActionDismissReminder,
+		ReminderOccurrenceID: pending.Reminders[0].ReminderOccurrenceID,
+	})
+	if err != nil {
+		t.Fatalf("dismiss reminder: %v", err)
+	}
+	if dismissed.Rejected || len(dismissed.Writes) != 1 || dismissed.Writes[0].Kind != "reminder_dismissal" || dismissed.Writes[0].Status != "dismissed" {
+		t.Fatalf("dismissed result = %#v, want dismissed write", dismissed)
+	}
+
+	repeated, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:               PlanningTaskActionDismissReminder,
+		ReminderOccurrenceID: pending.Reminders[0].ReminderOccurrenceID,
+	})
+	if err != nil {
+		t.Fatalf("dismiss reminder again: %v", err)
+	}
+	if repeated.Rejected || repeated.Writes[0].Status != "already_dismissed" {
+		t.Fatalf("repeat dismissal = %#v, want already_dismissed", repeated)
+	}
+
+	afterDismiss, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListReminders,
+		From:   "2026-04-16T08:00:00Z",
+		To:     "2026-04-16T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("list pending after dismiss: %v", err)
+	}
+	if afterDismiss.Rejected || len(afterDismiss.Reminders) != 0 {
+		t.Fatalf("after dismiss = %#v, want no pending reminders", afterDismiss)
+	}
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Standup",
+		StartAt:      "2026-04-16T11:00:00Z",
+		Reminders:    []ReminderRuleRequest{{BeforeMinutes: 30}},
+	})
+	if err != nil {
+		t.Fatalf("create event reminder: %v", err)
+	}
+	if event.Rejected || len(event.Events[0].Reminders) != 1 {
+		t.Fatalf("event result = %#v, want reminder", event)
+	}
+
+	eventUpdateJSON := `{"action":"update_event","event_id":"` + event.Events[0].ID + `","reminders":null}`
+	eventUpdate, err := DecodePlanningTaskRequest(bytes.NewBufferString(eventUpdateJSON))
+	if err != nil {
+		t.Fatalf("decode event reminder clear: %v", err)
+	}
+	updated, err := RunPlanningTask(ctx, options, eventUpdate)
+	if err != nil {
+		t.Fatalf("clear event reminder: %v", err)
+	}
+	if updated.Rejected || len(updated.Events[0].Reminders) != 0 {
+		t.Fatalf("updated event = %#v, want reminders cleared", updated)
+	}
+}
+
+func TestRunPlanningTaskDirectReminderUpdates(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Personal",
+		Title:        "Call pharmacy",
+		DueAt:        "2026-04-16T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if task.Rejected || len(task.Tasks) != 1 {
+		t.Fatalf("task result = %#v, want stored task", task)
+	}
+
+	updatedTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:    PlanningTaskActionUpdateTask,
+		TaskID:    task.Tasks[0].ID,
+		Reminders: []ReminderRuleRequest{{BeforeMinutes: 45}},
+	})
+	if err != nil {
+		t.Fatalf("update task reminders: %v", err)
+	}
+	if updatedTask.Rejected || len(updatedTask.Tasks) != 1 || len(updatedTask.Tasks[0].Reminders) != 1 || updatedTask.Tasks[0].Reminders[0].BeforeMinutes != 45 {
+		t.Fatalf("updated task = %#v, want direct reminder update", updatedTask)
+	}
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Check-in",
+		StartAt:      "2026-04-16T11:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if event.Rejected || len(event.Events) != 1 {
+		t.Fatalf("event result = %#v, want stored event", event)
+	}
+
+	updatedEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:    PlanningTaskActionUpdateEvent,
+		EventID:   event.Events[0].ID,
+		Reminders: []ReminderRuleRequest{{BeforeMinutes: 15}},
+	})
+	if err != nil {
+		t.Fatalf("update event reminders: %v", err)
+	}
+	if updatedEvent.Rejected || len(updatedEvent.Events) != 1 || len(updatedEvent.Events[0].Reminders) != 1 || updatedEvent.Events[0].Reminders[0].BeforeMinutes != 15 {
+		t.Fatalf("updated event = %#v, want direct reminder update", updatedEvent)
+	}
+}
+
+func TestRunPlanningTaskRecurringReminderPendingOccurrences(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	count := int32(3)
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Personal",
+		Title:        "Daily review",
+		DueDate:      "2026-04-16",
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+		Reminders:    []ReminderRuleRequest{{BeforeMinutes: 30}},
+	})
+	if err != nil {
+		t.Fatalf("create recurring task reminder: %v", err)
+	}
+	if task.Rejected {
+		t.Fatalf("task result = %#v, want success", task)
+	}
+
+	pending, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListReminders,
+		From:   "2026-04-15T23:00:00Z",
+		To:     "2026-04-18T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("list recurring pending reminders: %v", err)
+	}
+	if pending.Rejected || len(pending.Reminders) != 3 {
+		t.Fatalf("pending result = %#v, want three recurring reminders", pending)
+	}
+	if pending.Reminders[0].DueDate != "2026-04-16" || pending.Reminders[0].RemindAt != "2026-04-15T23:30:00Z" {
+		t.Fatalf("first pending reminder = %#v, want UTC midnight minus offset", pending.Reminders[0])
+	}
+	if pending.Reminders[2].DueDate != "2026-04-18" {
+		t.Fatalf("last pending reminder = %#v, want 2026-04-18 occurrence", pending.Reminders[2])
+	}
+}
+
+func TestRunPlanningTaskReminderRejectionsBeforeDatabaseCreation(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "non-positive reminder",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","reminders":[{"before_minutes":0}]}`,
+		},
+		{
+			name:    "duplicate reminder",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","reminders":[{"before_minutes":30},{"before_minutes":30}]}`,
+		},
+		{
+			name:    "task reminder missing due",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","reminders":[{"before_minutes":30}]}`,
+		},
+		{
+			name:    "missing dismissal id",
+			request: `{"action":"dismiss_reminder"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := DecodePlanningTaskRequest(bytes.NewBufferString(test.request))
+			if err != nil {
+				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
+			}
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask(): %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+				t.Fatalf("database directory exists after validation rejection: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunPlanningTaskDeleteEventAndTask(t *testing.T) {
 	t.Parallel()
 

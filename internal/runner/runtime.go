@@ -298,6 +298,28 @@ func (runtime *localRuntime) ListAgenda(ctx context.Context, params domain.Agend
 	return service.ListAgenda(params)
 }
 
+func (runtime *localRuntime) ListPendingReminders(ctx context.Context, params domain.ReminderQueryParams) (domain.Page[domain.PendingReminder], error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+	return service.ListPendingReminders(params)
+}
+
+func (runtime *localRuntime) DismissReminderOccurrence(ctx context.Context, reminderOccurrenceID string) (domain.ReminderDismissal, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.ReminderDismissal{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.ReminderDismissal{}, err
+	}
+	return service.DismissReminderOccurrence(reminderOccurrenceID)
+}
+
 func (runtime *localRuntime) localService() (*internalservice.Service, error) {
 	if runtime == nil || runtime.service == nil {
 		return nil, fmt.Errorf("local OpenPlanner runtime is required")

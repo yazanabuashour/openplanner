@@ -641,6 +641,202 @@ func TestTaskStatusDoneCompletionInvariants(t *testing.T) {
 	}
 }
 
+func TestReminderPendingQueriesAndDismissal(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	otherCalendar, err := svc.CreateCalendar(domain.Calendar{Name: "Other"})
+	if err != nil {
+		t.Fatalf("CreateCalendar(other): %v", err)
+	}
+
+	eventStart := time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC)
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Standup",
+		StartAt:    &eventStart,
+		Reminders:  []domain.ReminderRule{{BeforeMinutes: 60}},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	if len(event.Reminders) != 1 || event.Reminders[0].ID == "" {
+		t.Fatalf("event reminders = %#v, want generated reminder id", event.Reminders)
+	}
+
+	dueDate := "2026-04-16"
+	if _, err := svc.CreateTask(domain.Task{
+		CalendarID: otherCalendar.ID,
+		Title:      "Filtered out",
+		DueDate:    &dueDate,
+		Reminders:  []domain.ReminderRule{{BeforeMinutes: 30}},
+	}); err != nil {
+		t.Fatalf("CreateTask(other): %v", err)
+	}
+
+	dueAt := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	recurring, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Daily review",
+		DueAt:      &dueAt,
+		Recurrence: &domain.RecurrenceRule{Frequency: domain.RecurrenceFrequencyDaily, Count: int32Ptr(2)},
+		Reminders:  []domain.ReminderRule{{BeforeMinutes: 15}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(recurring): %v", err)
+	}
+	if len(recurring.Reminders) != 1 || recurring.Reminders[0].ID == "" {
+		t.Fatalf("recurring reminders = %#v, want generated reminder id", recurring.Reminders)
+	}
+
+	dateTask, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Medicine",
+		DueDate:    &dueDate,
+		Reminders:  []domain.ReminderRule{{BeforeMinutes: 30}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(date reminder): %v", err)
+	}
+
+	page, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:       time.Date(2026, 4, 15, 23, 0, 0, 0, time.UTC),
+		To:         time.Date(2026, 4, 17, 13, 0, 0, 0, time.UTC),
+		CalendarID: calendar.ID,
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(): %v", err)
+	}
+	if len(page.Items) != 4 {
+		t.Fatalf("pending reminders length = %d, want 4: %#v", len(page.Items), page.Items)
+	}
+	if page.Items[0].Title != "Medicine" || !page.Items[0].RemindAt.Equal(time.Date(2026, 4, 15, 23, 30, 0, 0, time.UTC)) || page.Items[0].DueDate == nil || *page.Items[0].DueDate != dueDate {
+		t.Fatalf("first pending reminder = %#v, want date task at UTC midnight minus offset", page.Items[0])
+	}
+	if page.Items[1].Title != "Standup" || !page.Items[1].RemindAt.Equal(time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("second pending reminder = %#v, want Standup at 09:00", page.Items[1])
+	}
+	if page.Items[2].Title != "Daily review" || page.Items[3].Title != "Daily review" {
+		t.Fatalf("recurring reminders = %#v/%#v, want two Daily review occurrences", page.Items[2], page.Items[3])
+	}
+	if page.Items[0].ID == "" || page.Items[0].ReminderID != dateTask.Reminders[0].ID {
+		t.Fatalf("pending reminder id fields = %#v", page.Items[0])
+	}
+
+	firstPage, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:       time.Date(2026, 4, 15, 23, 0, 0, 0, time.UTC),
+		To:         time.Date(2026, 4, 17, 13, 0, 0, 0, time.UTC),
+		CalendarID: calendar.ID,
+		Limit:      2,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(first page): %v", err)
+	}
+	if len(firstPage.Items) != 2 || firstPage.NextCursor == nil {
+		t.Fatalf("first page = %#v, want two items and next cursor", firstPage)
+	}
+	secondPage, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:       time.Date(2026, 4, 15, 23, 0, 0, 0, time.UTC),
+		To:         time.Date(2026, 4, 17, 13, 0, 0, 0, time.UTC),
+		CalendarID: calendar.ID,
+		Cursor:     *firstPage.NextCursor,
+		Limit:      2,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(second page): %v", err)
+	}
+	if len(secondPage.Items) != 2 {
+		t.Fatalf("second page length = %d, want 2", len(secondPage.Items))
+	}
+
+	dismissal, err := svc.DismissReminderOccurrence(page.Items[0].ID)
+	if err != nil {
+		t.Fatalf("DismissReminderOccurrence(first): %v", err)
+	}
+	if dismissal.AlreadyDismissed {
+		t.Fatalf("first dismissal = %#v, want newly dismissed", dismissal)
+	}
+	repeated, err := svc.DismissReminderOccurrence(page.Items[0].ID)
+	if err != nil {
+		t.Fatalf("DismissReminderOccurrence(second): %v", err)
+	}
+	if !repeated.AlreadyDismissed {
+		t.Fatalf("second dismissal = %#v, want already dismissed", repeated)
+	}
+	afterDismiss, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:       time.Date(2026, 4, 15, 23, 0, 0, 0, time.UTC),
+		To:         time.Date(2026, 4, 17, 13, 0, 0, 0, time.UTC),
+		CalendarID: calendar.ID,
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(after dismiss): %v", err)
+	}
+	if len(afterDismiss.Items) != 3 || afterDismiss.Items[0].Title == "Medicine" {
+		t.Fatalf("after dismiss = %#v, want dismissed occurrence omitted", afterDismiss.Items)
+	}
+}
+
+func TestReminderValidationRejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	dueDate := "2026-04-16"
+
+	invalidCases := []struct {
+		name string
+		task domain.Task
+	}{
+		{
+			name: "non-positive offset",
+			task: domain.Task{CalendarID: calendar.ID, Title: "Bad reminder", DueDate: &dueDate, Reminders: []domain.ReminderRule{{BeforeMinutes: 0}}},
+		},
+		{
+			name: "duplicate offset",
+			task: domain.Task{CalendarID: calendar.ID, Title: "Duplicate reminder", DueDate: &dueDate, Reminders: []domain.ReminderRule{{BeforeMinutes: 30}, {BeforeMinutes: 30}}},
+		},
+		{
+			name: "missing due",
+			task: domain.Task{CalendarID: calendar.ID, Title: "No due", Reminders: []domain.ReminderRule{{BeforeMinutes: 30}}},
+		},
+	}
+	for _, test := range invalidCases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := svc.CreateTask(test.task)
+			if err == nil {
+				t.Fatal("CreateTask() error = nil, want validation error")
+			}
+			var validationErr *service.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("CreateTask() error = %T, want ValidationError", err)
+			}
+		})
+	}
+
+	_, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From: time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("ListPendingReminders(invalid range) error = nil, want validation error")
+	}
+	var validationErr *service.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ListPendingReminders(invalid range) error = %T, want ValidationError", err)
+	}
+
+	_, err = svc.DismissReminderOccurrence("not-valid")
+	if err == nil {
+		t.Fatal("DismissReminderOccurrence(invalid id) error = nil, want validation error")
+	}
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("DismissReminderOccurrence(invalid id) error = %T, want ValidationError", err)
+	}
+}
+
 func int32Ptr(value int32) *int32 {
 	return &value
 }

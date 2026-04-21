@@ -92,6 +92,8 @@ Supported routine actions are:
 - `list_events`
 - `list_tasks`
 - `complete_task`
+- `list_pending_reminders`
+- `dismiss_reminder`
 - `validate`
 
 Update actions use patch semantics: omitted fields are preserved, non-null
@@ -104,6 +106,19 @@ Tasks support optional metadata. `priority` is one of `low`, `medium`, or
 `done` and defaults to `todo`. `tags` is an array of lowercase labels using
 letters, digits, `_`, or `-`; `list_tasks` matches all supplied tags when
 filtering.
+
+Events and tasks support optional reminder rules through `reminders`, an array
+of objects with positive `before_minutes` values. Reminder offsets are measured
+before the event start or task due time. Use `list_pending_reminders` with
+`from` and `to` RFC3339 bounds to query pending reminder occurrences, including
+expanded recurring occurrences, and use `dismiss_reminder` with the returned
+`reminder_occurrence_id` to dismiss an occurrence idempotently.
+
+```json
+{"action":"create_task","calendar_name":"Personal","title":"Take medicine","due_at":"2026-04-16T10:00:00Z","reminders":[{"before_minutes":60}]}
+{"action":"list_pending_reminders","from":"2026-04-16T08:00:00Z","to":"2026-04-16T10:00:00Z","limit":10}
+{"action":"dismiss_reminder","reminder_occurrence_id":"<id-from-list-pending-reminders-result>"}
+```
 
 Delete actions use `event_id` for `delete_event`, `task_id` for `delete_task`,
 and exactly one of `calendar_id` or `calendar_name` for `delete_calendar`.

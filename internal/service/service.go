@@ -196,6 +196,7 @@ func (service *Service) CreateEvent(input domain.Event) (domain.Event, error) {
 		StartDate:   sanitizeOptionalString(input.StartDate),
 		EndDate:     sanitizeOptionalString(input.EndDate),
 		Recurrence:  cloneRule(input.Recurrence),
+		Reminders:   buildReminderRules(input.Reminders, service.now()),
 		CreatedAt:   service.now(),
 		UpdatedAt:   service.now(),
 	}
@@ -309,6 +310,13 @@ func (service *Service) UpdateEvent(id string, patch domain.EventPatch) (domain.
 			event.Recurrence = cloneRule(&patch.Recurrence.Value)
 		}
 	}
+	if patch.Reminders.Present {
+		if patch.Reminders.Clear {
+			event.Reminders = []domain.ReminderRule{}
+		} else {
+			event.Reminders = buildReminderRules(patch.Reminders.Value, service.now())
+		}
+	}
 	event.UpdatedAt = service.now()
 
 	if err := validateEvent(event); err != nil {
@@ -358,6 +366,7 @@ func (service *Service) CreateTask(input domain.Task) (domain.Task, error) {
 		DueAt:       cloneTimePtr(input.DueAt),
 		DueDate:     sanitizeOptionalString(input.DueDate),
 		Recurrence:  cloneRule(input.Recurrence),
+		Reminders:   buildReminderRules(input.Reminders, service.now()),
 		Priority:    defaultTaskPriority(input.Priority),
 		Status:      defaultTaskStatus(input.Status),
 		Tags:        normalizeTags(input.Tags),
@@ -483,6 +492,13 @@ func (service *Service) UpdateTask(id string, patch domain.TaskPatch) (domain.Ta
 			task.Recurrence = nil
 		} else {
 			task.Recurrence = cloneRule(&patch.Recurrence.Value)
+		}
+	}
+	if patch.Reminders.Present {
+		if patch.Reminders.Clear {
+			task.Reminders = []domain.ReminderRule{}
+		} else {
+			task.Reminders = buildReminderRules(patch.Reminders.Value, service.now())
 		}
 	}
 	if patch.Priority.Present {
@@ -723,6 +739,85 @@ func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[doma
 	return paginateAgenda(items, params)
 }
 
+func (service *Service) ListPendingReminders(params domain.ReminderQueryParams) (domain.Page[domain.PendingReminder], error) {
+	if params.From.IsZero() || params.To.IsZero() || !params.From.Before(params.To) {
+		return domain.Page[domain.PendingReminder]{}, &ValidationError{
+			Message: "reminder query validation failed",
+			FieldErrors: []FieldError{
+				{Field: "range", Message: "from must be before to"},
+			},
+		}
+	}
+	if params.CalendarID != "" {
+		if err := validateResourceID("calendarId", params.CalendarID); err != nil {
+			return domain.Page[domain.PendingReminder]{}, err
+		}
+	}
+
+	events, err := service.store.ListEvents(params.CalendarID)
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+	tasks, err := service.store.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{CalendarID: params.CalendarID}})
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+
+	reminderIDs := reminderIDsFor(events, tasks)
+	dismissals, err := service.store.ListReminderDismissals(reminderIDs)
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+
+	items := []domain.PendingReminder{}
+	for _, event := range events {
+		items = append(items, pendingRemindersForEvent(event, dismissals, params.From, params.To)...)
+	}
+	for _, task := range tasks {
+		items = append(items, pendingRemindersForTask(task, dismissals, params.From, params.To)...)
+	}
+	slices.SortFunc(items, comparePendingReminders)
+
+	return paginatePendingReminders(items, params)
+}
+
+func (service *Service) DismissReminderOccurrence(reminderOccurrenceID string) (domain.ReminderDismissal, error) {
+	token, err := decodeReminderOccurrenceID(strings.TrimSpace(reminderOccurrenceID))
+	if err != nil || token.ReminderID == "" || token.OccurrenceKey == "" {
+		return domain.ReminderDismissal{}, &ValidationError{
+			Message: "reminder dismissal validation failed",
+			FieldErrors: []FieldError{
+				{Field: "reminderOccurrenceId", Message: "reminderOccurrenceId must be a valid reminder occurrence id"},
+			},
+		}
+	}
+	if err := validateResourceID("reminderId", token.ReminderID); err != nil {
+		return domain.ReminderDismissal{}, err
+	}
+	if _, err := service.store.GetReminder(token.ReminderID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.ReminderDismissal{}, &NotFoundError{Resource: "reminder", ID: token.ReminderID, Message: "reminder not found"}
+		}
+		return domain.ReminderDismissal{}, err
+	}
+
+	dismissedAt := service.now()
+	alreadyDismissed, err := service.store.DismissReminderOccurrence(token.ReminderID, token.OccurrenceKey, dismissedAt)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.ReminderDismissal{}, &NotFoundError{Resource: "reminder", ID: token.ReminderID, Message: "reminder not found"}
+		}
+		return domain.ReminderDismissal{}, err
+	}
+
+	return domain.ReminderDismissal{
+		ReminderID:       token.ReminderID,
+		OccurrenceKey:    token.OccurrenceKey,
+		DismissedAt:      dismissedAt,
+		AlreadyDismissed: alreadyDismissed,
+	}, nil
+}
+
 func validateEvent(event domain.Event) error {
 	fieldErrors := []FieldError{}
 	if event.Title == "" {
@@ -761,6 +856,7 @@ func validateEvent(event domain.Event) error {
 		}
 	}
 	fieldErrors = append(fieldErrors, validateRecurrence(event.Recurrence, timed || event.StartAt != nil)...)
+	fieldErrors = append(fieldErrors, validateReminders(event.Reminders)...)
 
 	if len(fieldErrors) > 0 {
 		return &ValidationError{
@@ -801,7 +897,11 @@ func validateTask(task domain.Task) error {
 	if task.Recurrence != nil && task.DueAt == nil && task.DueDate == nil {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence", Message: "recurring tasks require dueAt or dueDate"})
 	}
+	if len(task.Reminders) > 0 && task.DueAt == nil && task.DueDate == nil {
+		fieldErrors = append(fieldErrors, FieldError{Field: "reminders", Message: "task reminders require dueAt or dueDate"})
+	}
 	fieldErrors = append(fieldErrors, validateRecurrence(task.Recurrence, task.DueAt != nil)...)
+	fieldErrors = append(fieldErrors, validateReminders(task.Reminders)...)
 
 	if len(fieldErrors) > 0 {
 		return &ValidationError{
@@ -873,6 +973,47 @@ func validateTags(tags []string) []FieldError {
 	return fieldErrors
 }
 
+func validateReminders(reminders []domain.ReminderRule) []FieldError {
+	fieldErrors := []FieldError{}
+	seen := map[int32]bool{}
+	for _, reminder := range reminders {
+		switch {
+		case reminder.BeforeMinutes <= 0:
+			fieldErrors = append(fieldErrors, FieldError{Field: "reminders.beforeMinutes", Message: "beforeMinutes must be greater than 0"})
+		case seen[reminder.BeforeMinutes]:
+			fieldErrors = append(fieldErrors, FieldError{Field: "reminders", Message: "reminders cannot contain duplicate beforeMinutes values"})
+		}
+		seen[reminder.BeforeMinutes] = true
+	}
+	return fieldErrors
+}
+
+func buildReminderRules(input []domain.ReminderRule, now time.Time) []domain.ReminderRule {
+	if len(input) == 0 {
+		return []domain.ReminderRule{}
+	}
+	reminders := make([]domain.ReminderRule, 0, len(input))
+	for _, reminder := range input {
+		built := domain.ReminderRule{
+			ID:            reminder.ID,
+			BeforeMinutes: reminder.BeforeMinutes,
+			CreatedAt:     reminder.CreatedAt,
+			UpdatedAt:     reminder.UpdatedAt,
+		}
+		if built.ID == "" {
+			built.ID = ulid.Make().String()
+		}
+		if built.CreatedAt.IsZero() {
+			built.CreatedAt = now
+		}
+		if built.UpdatedAt.IsZero() {
+			built.UpdatedAt = now
+		}
+		reminders = append(reminders, built)
+	}
+	return reminders
+}
+
 func validateRecurrence(rule *domain.RecurrenceRule, timed bool) []FieldError {
 	if rule == nil {
 		return nil
@@ -937,6 +1078,16 @@ type createdCursor struct {
 type agendaCursor struct {
 	OccurrenceKey string `json:"occurrenceKey"`
 	SortKey       string `json:"sortKey"`
+}
+
+type reminderCursor struct {
+	ID       string `json:"id"`
+	RemindAt string `json:"remindAt"`
+}
+
+type reminderOccurrenceToken struct {
+	ReminderID    string `json:"reminder_id"`
+	OccurrenceKey string `json:"occurrence_key"`
 }
 
 func paginateByCreatedAt[T any](items []T, params domain.PageParams) (domain.Page[T], error) {
@@ -1019,6 +1170,49 @@ func paginateAgenda(items []domain.AgendaItem, params domain.AgendaParams) (doma
 		nextCursor := encodeCursor(agendaCursor{
 			OccurrenceKey: last.OccurrenceKey,
 			SortKey:       agendaSortKey(last),
+		})
+		page.NextCursor = &nextCursor
+	}
+
+	return page, nil
+}
+
+func paginatePendingReminders(items []domain.PendingReminder, params domain.ReminderQueryParams) (domain.Page[domain.PendingReminder], error) {
+	limit := normalizeLimit(params.Limit)
+	start := 0
+	if params.Cursor != "" {
+		var cursor reminderCursor
+		if err := decodeCursor(params.Cursor, &cursor); err != nil {
+			return domain.Page[domain.PendingReminder]{}, invalidCursorError()
+		}
+
+		matched := false
+		for index, item := range items {
+			if item.ID == cursor.ID && item.RemindAt.Format(time.RFC3339Nano) == cursor.RemindAt {
+				start = index + 1
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return domain.Page[domain.PendingReminder]{}, invalidCursorError()
+		}
+	}
+	if len(items) == 0 {
+		return domain.Page[domain.PendingReminder]{Items: []domain.PendingReminder{}}, nil
+	}
+
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+
+	page := domain.Page[domain.PendingReminder]{Items: slices.Clone(items[start:end])}
+	if end < len(items) {
+		last := items[end-1]
+		nextCursor := encodeCursor(reminderCursor{
+			ID:       last.ID,
+			RemindAt: last.RemindAt.Format(time.RFC3339Nano),
 		})
 		page.NextCursor = &nextCursor
 	}
@@ -1186,6 +1380,213 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 	return items
 }
 
+func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	if len(event.Reminders) == 0 {
+		return items
+	}
+
+	switch {
+	case event.StartAt != nil:
+		duration := time.Duration(0)
+		if event.EndAt != nil {
+			duration = event.EndAt.Sub(*event.StartAt)
+		}
+		for _, reminder := range event.Reminders {
+			offset := time.Duration(reminder.BeforeMinutes) * time.Minute
+			var occurrences []time.Time
+			if event.Recurrence != nil {
+				occurrences = recurrence.ExpandTimed(*event.StartAt, event.Recurrence, from.Add(offset), to.Add(offset))
+			} else {
+				occurrences = []time.Time{*event.StartAt}
+			}
+			for _, occurrence := range occurrences {
+				remindAt := occurrence.Add(-offset)
+				if remindAt.Before(from) || !remindAt.Before(to) {
+					continue
+				}
+				key := occurrenceKey(event.ID, &occurrence, nil)
+				if reminderDismissed(dismissals, reminder.ID, key) {
+					continue
+				}
+				endAt := occurrence
+				if event.EndAt != nil {
+					endAt = occurrence.Add(duration)
+				}
+				item := domain.PendingReminder{
+					ID:            reminderOccurrenceID(reminder.ID, key),
+					ReminderID:    reminder.ID,
+					OwnerKind:     domain.ReminderOwnerKindEvent,
+					OwnerID:       event.ID,
+					CalendarID:    event.CalendarID,
+					Title:         event.Title,
+					OccurrenceKey: key,
+					RemindAt:      remindAt,
+					BeforeMinutes: reminder.BeforeMinutes,
+					StartAt:       cloneTimePtr(&occurrence),
+				}
+				if event.EndAt != nil {
+					item.EndAt = cloneTimePtr(&endAt)
+				}
+				items = append(items, item)
+			}
+		}
+	case event.StartDate != nil:
+		spanDays := 1
+		if event.EndDate != nil {
+			spanDays = inclusiveDateSpan(*event.StartDate, *event.EndDate)
+		}
+		for _, reminder := range event.Reminders {
+			offset := time.Duration(reminder.BeforeMinutes) * time.Minute
+			var occurrences []string
+			if event.Recurrence != nil {
+				occurrences = recurrence.ExpandDate(*event.StartDate, event.Recurrence, from.Add(offset), to.Add(offset))
+			} else {
+				occurrences = []string{*event.StartDate}
+			}
+			for _, occurrence := range occurrences {
+				remindAt := mustParseDate(occurrence).Add(-offset)
+				if remindAt.Before(from) || !remindAt.Before(to) {
+					continue
+				}
+				key := occurrenceKey(event.ID, nil, &occurrence)
+				if reminderDismissed(dismissals, reminder.ID, key) {
+					continue
+				}
+				endDate := occurrence
+				if spanDays > 1 {
+					endDate = dateAddDays(occurrence, spanDays-1)
+				}
+				item := domain.PendingReminder{
+					ID:            reminderOccurrenceID(reminder.ID, key),
+					ReminderID:    reminder.ID,
+					OwnerKind:     domain.ReminderOwnerKindEvent,
+					OwnerID:       event.ID,
+					CalendarID:    event.CalendarID,
+					Title:         event.Title,
+					OccurrenceKey: key,
+					RemindAt:      remindAt,
+					BeforeMinutes: reminder.BeforeMinutes,
+					StartDate:     &occurrence,
+				}
+				if spanDays > 1 {
+					item.EndDate = &endDate
+				}
+				items = append(items, item)
+			}
+		}
+	}
+
+	return items
+}
+
+func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	if len(task.Reminders) == 0 {
+		return items
+	}
+
+	switch {
+	case task.DueAt != nil:
+		for _, reminder := range task.Reminders {
+			offset := time.Duration(reminder.BeforeMinutes) * time.Minute
+			var occurrences []time.Time
+			if task.Recurrence != nil {
+				occurrences = recurrence.ExpandTimed(*task.DueAt, task.Recurrence, from.Add(offset), to.Add(offset))
+			} else {
+				occurrences = []time.Time{*task.DueAt}
+			}
+			for _, occurrence := range occurrences {
+				remindAt := occurrence.Add(-offset)
+				if remindAt.Before(from) || !remindAt.Before(to) {
+					continue
+				}
+				key := occurrenceKey(task.ID, &occurrence, nil)
+				if reminderDismissed(dismissals, reminder.ID, key) {
+					continue
+				}
+				items = append(items, domain.PendingReminder{
+					ID:            reminderOccurrenceID(reminder.ID, key),
+					ReminderID:    reminder.ID,
+					OwnerKind:     domain.ReminderOwnerKindTask,
+					OwnerID:       task.ID,
+					CalendarID:    task.CalendarID,
+					Title:         task.Title,
+					OccurrenceKey: key,
+					RemindAt:      remindAt,
+					BeforeMinutes: reminder.BeforeMinutes,
+					DueAt:         cloneTimePtr(&occurrence),
+				})
+			}
+		}
+	case task.DueDate != nil:
+		for _, reminder := range task.Reminders {
+			offset := time.Duration(reminder.BeforeMinutes) * time.Minute
+			var occurrences []string
+			if task.Recurrence != nil {
+				occurrences = recurrence.ExpandDate(*task.DueDate, task.Recurrence, from.Add(offset), to.Add(offset))
+			} else {
+				occurrences = []string{*task.DueDate}
+			}
+			for _, occurrence := range occurrences {
+				remindAt := mustParseDate(occurrence).Add(-offset)
+				if remindAt.Before(from) || !remindAt.Before(to) {
+					continue
+				}
+				key := occurrenceKey(task.ID, nil, &occurrence)
+				if reminderDismissed(dismissals, reminder.ID, key) {
+					continue
+				}
+				items = append(items, domain.PendingReminder{
+					ID:            reminderOccurrenceID(reminder.ID, key),
+					ReminderID:    reminder.ID,
+					OwnerKind:     domain.ReminderOwnerKindTask,
+					OwnerID:       task.ID,
+					CalendarID:    task.CalendarID,
+					Title:         task.Title,
+					OccurrenceKey: key,
+					RemindAt:      remindAt,
+					BeforeMinutes: reminder.BeforeMinutes,
+					DueDate:       &occurrence,
+				})
+			}
+		}
+	}
+
+	return items
+}
+
+func reminderIDsFor(events []domain.Event, tasks []domain.Task) []string {
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, event := range events {
+		for _, reminder := range event.Reminders {
+			if !seen[reminder.ID] {
+				seen[reminder.ID] = true
+				ids = append(ids, reminder.ID)
+			}
+		}
+	}
+	for _, task := range tasks {
+		for _, reminder := range task.Reminders {
+			if !seen[reminder.ID] {
+				seen[reminder.ID] = true
+				ids = append(ids, reminder.ID)
+			}
+		}
+	}
+	return ids
+}
+
+func reminderDismissed(dismissals map[string]map[string]time.Time, reminderID string, occurrenceKey string) bool {
+	occurrences, ok := dismissals[reminderID]
+	if !ok {
+		return false
+	}
+	_, ok = occurrences[occurrenceKey]
+	return ok
+}
+
 func compareAgendaItems(left, right domain.AgendaItem) int {
 	if cmp := strings.Compare(agendaSortKey(left), agendaSortKey(right)); cmp != 0 {
 		return cmp
@@ -1198,6 +1599,22 @@ func compareAgendaItems(left, right domain.AgendaItem) int {
 	}
 
 	return strings.Compare(left.OccurrenceKey, right.OccurrenceKey)
+}
+
+func comparePendingReminders(left, right domain.PendingReminder) int {
+	if cmp := left.RemindAt.Compare(right.RemindAt); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(string(left.OwnerKind), string(right.OwnerKind)); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.OwnerID, right.OwnerID); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.OccurrenceKey, right.OccurrenceKey); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(left.ReminderID, right.ReminderID)
 }
 
 func agendaSortKey(item domain.AgendaItem) string {
@@ -1224,6 +1641,24 @@ func occurrenceKey(id string, at *time.Time, date *string) string {
 	}
 
 	return id + "@single"
+}
+
+func reminderOccurrenceID(reminderID string, occurrenceKey string) string {
+	return encodeCursor(reminderOccurrenceToken{
+		ReminderID:    reminderID,
+		OccurrenceKey: occurrenceKey,
+	})
+}
+
+func decodeReminderOccurrenceID(value string) (reminderOccurrenceToken, error) {
+	var token reminderOccurrenceToken
+	if value == "" {
+		return token, invalidCursorError()
+	}
+	if err := decodeCursor(value, &token); err != nil {
+		return reminderOccurrenceToken{}, err
+	}
+	return token, nil
 }
 
 func encodeCursor(value any) string {
