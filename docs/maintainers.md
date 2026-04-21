@@ -21,6 +21,24 @@ public package/API compatibility promises, deploy workflows, ports, OpenAPI
 contracts, or UI docs without a new issue that explicitly approves that product
 surface.
 
+## SQLite migrations
+
+SQLite schema changes live in `internal/store/sqlite.go` as ordered embedded
+migrations. The current bootstrap schema is migration version `1`, recorded in
+`schema_migrations(version INTEGER PRIMARY KEY)`.
+
+When changing the local data model:
+
+- Append a new migration with the next integer version; do not renumber or edit
+  merged migration SQL except for documented compatibility fixes.
+- Keep `store.Open` as the schema entrypoint so the JSON runner upgrades local
+  databases before any read or write operation.
+- Add store tests for both fresh databases and upgrades from the previous schema
+  shape, including preservation of existing calendar, event, task, and related
+  rows when relevant.
+- Reject databases with migration versions newer than the current binary knows
+  instead of attempting a downgrade.
+
 ## Initial Setup
 
 Preferred tool install:

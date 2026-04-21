@@ -22,6 +22,74 @@ type Store struct {
 	db *sql.DB
 }
 
+type migration struct {
+	version int
+	name    string
+	sql     string
+}
+
+var migrations = []migration{
+	{
+		version: 1,
+		name:    "initial schema",
+		sql: `
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY
+			);
+
+			CREATE TABLE IF NOT EXISTS calendars (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL UNIQUE,
+				description TEXT,
+				color TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS events (
+				id TEXT PRIMARY KEY,
+				calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE RESTRICT,
+				title TEXT NOT NULL,
+				description TEXT,
+				location TEXT,
+				start_at TEXT,
+				end_at TEXT,
+				start_date TEXT,
+				end_date TEXT,
+				recurrence_json TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS events_calendar_idx ON events(calendar_id, created_at DESC, id DESC);
+
+			CREATE TABLE IF NOT EXISTS tasks (
+				id TEXT PRIMARY KEY,
+				calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE RESTRICT,
+				title TEXT NOT NULL,
+				description TEXT,
+				due_at TEXT,
+				due_date TEXT,
+				recurrence_json TEXT,
+				completed_at TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS tasks_calendar_idx ON tasks(calendar_id, created_at DESC, id DESC);
+
+			CREATE TABLE IF NOT EXISTS task_occurrence_states (
+				task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+				occurrence_key TEXT NOT NULL,
+				occurrence_at TEXT,
+				occurrence_date TEXT,
+				completed_at TEXT NOT NULL,
+				PRIMARY KEY (task_id, occurrence_key)
+			);
+		`,
+	},
+}
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -426,67 +494,86 @@ func (store *Store) ListTaskCompletions(taskIDs []string) (map[string]map[string
 }
 
 func (store *Store) migrate() error {
-	const initialMigration = `
+	if _, err := store.db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
+	`); err != nil {
+		return fmt.Errorf("prepare schema migrations: %w", err)
+	}
 
-		CREATE TABLE IF NOT EXISTS calendars (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL UNIQUE,
-			description TEXT,
-			color TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
-		CREATE TABLE IF NOT EXISTS events (
-			id TEXT PRIMARY KEY,
-			calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE RESTRICT,
-			title TEXT NOT NULL,
-			description TEXT,
-			location TEXT,
-			start_at TEXT,
-			end_at TEXT,
-			start_date TEXT,
-			end_date TEXT,
-			recurrence_json TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
+	appliedVersions, err := readAppliedMigrationVersions(tx)
+	if err != nil {
+		return err
+	}
+	latestKnownVersion := latestMigrationVersion()
+	for version := range appliedVersions {
+		if version > latestKnownVersion {
+			return fmt.Errorf("migrate schema: database schema version %d is newer than supported version %d", version, latestKnownVersion)
+		}
+	}
 
-		CREATE INDEX IF NOT EXISTS events_calendar_idx ON events(calendar_id, created_at DESC, id DESC);
+	for _, migration := range migrations {
+		if appliedVersions[migration.version] {
+			continue
+		}
 
-		CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE RESTRICT,
-			title TEXT NOT NULL,
-			description TEXT,
-			due_at TEXT,
-			due_date TEXT,
-			recurrence_json TEXT,
-			completed_at TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
+		if _, err := tx.Exec(migration.sql); err != nil {
+			return fmt.Errorf("apply schema migration %d (%s): %w", migration.version, migration.name, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, migration.version); err != nil {
+			return fmt.Errorf("record schema migration %d (%s): %w", migration.version, migration.name, err)
+		}
+	}
 
-		CREATE INDEX IF NOT EXISTS tasks_calendar_idx ON tasks(calendar_id, created_at DESC, id DESC);
-
-		CREATE TABLE IF NOT EXISTS task_occurrence_states (
-			task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-			occurrence_key TEXT NOT NULL,
-			occurrence_at TEXT,
-			occurrence_date TEXT,
-			completed_at TEXT NOT NULL,
-			PRIMARY KEY (task_id, occurrence_key)
-		);
-	`
-
-	if _, err := store.db.Exec(initialMigration); err != nil {
-		return fmt.Errorf("migrate schema: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migrations: %w", err)
 	}
 
 	return nil
+}
+
+func readAppliedMigrationVersions(tx *sql.Tx) (map[int]bool, error) {
+	rows, err := tx.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema migrations: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	appliedVersions := map[int]bool{}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan schema migration: %w", err)
+		}
+		appliedVersions[version] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate schema migrations: %w", err)
+	}
+
+	return appliedVersions, nil
+}
+
+func latestMigrationVersion() int {
+	latest := 0
+	for _, migration := range migrations {
+		if migration.version > latest {
+			latest = migration.version
+		}
+	}
+
+	return latest
 }
 
 func scanCalendars(rows *sql.Rows) ([]domain.Calendar, error) {
