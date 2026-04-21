@@ -19,22 +19,25 @@ import (
 )
 
 const (
-	PlanningTaskActionEnsureCalendar  = "ensure_calendar"
-	PlanningTaskActionCreateEvent     = "create_event"
-	PlanningTaskActionCreateTask      = "create_task"
-	PlanningTaskActionUpdateCalendar  = "update_calendar"
-	PlanningTaskActionUpdateEvent     = "update_event"
-	PlanningTaskActionUpdateTask      = "update_task"
-	PlanningTaskActionDeleteCalendar  = "delete_calendar"
-	PlanningTaskActionDeleteEvent     = "delete_event"
-	PlanningTaskActionDeleteTask      = "delete_task"
-	PlanningTaskActionListAgenda      = "list_agenda"
-	PlanningTaskActionListEvents      = "list_events"
-	PlanningTaskActionListTasks       = "list_tasks"
-	PlanningTaskActionCompleteTask    = "complete_task"
-	PlanningTaskActionListReminders   = "list_pending_reminders"
-	PlanningTaskActionDismissReminder = "dismiss_reminder"
-	PlanningTaskActionValidate        = "validate"
+	PlanningTaskActionEnsureCalendar      = "ensure_calendar"
+	PlanningTaskActionCreateEvent         = "create_event"
+	PlanningTaskActionCreateTask          = "create_task"
+	PlanningTaskActionUpdateCalendar      = "update_calendar"
+	PlanningTaskActionUpdateEvent         = "update_event"
+	PlanningTaskActionUpdateTask          = "update_task"
+	PlanningTaskActionDeleteCalendar      = "delete_calendar"
+	PlanningTaskActionDeleteEvent         = "delete_event"
+	PlanningTaskActionDeleteTask          = "delete_task"
+	PlanningTaskActionCreateEventTaskLink = "create_event_task_link"
+	PlanningTaskActionDeleteEventTaskLink = "delete_event_task_link"
+	PlanningTaskActionListEventTaskLinks  = "list_event_task_links"
+	PlanningTaskActionListAgenda          = "list_agenda"
+	PlanningTaskActionListEvents          = "list_events"
+	PlanningTaskActionListTasks           = "list_tasks"
+	PlanningTaskActionCompleteTask        = "complete_task"
+	PlanningTaskActionListReminders       = "list_pending_reminders"
+	PlanningTaskActionDismissReminder     = "dismiss_reminder"
+	PlanningTaskActionValidate            = "validate"
 )
 
 var (
@@ -92,16 +95,17 @@ type ReminderRuleRequest struct {
 }
 
 type PlanningTaskResult struct {
-	Rejected        bool            `json:"rejected"`
-	RejectionReason string          `json:"rejection_reason,omitempty"`
-	Writes          []PlanningWrite `json:"writes,omitempty"`
-	Calendars       []CalendarEntry `json:"calendars,omitempty"`
-	Events          []EventEntry    `json:"events,omitempty"`
-	Tasks           []TaskEntry     `json:"tasks,omitempty"`
-	Agenda          []AgendaEntry   `json:"agenda,omitempty"`
-	Reminders       []ReminderEntry `json:"reminders,omitempty"`
-	NextCursor      string          `json:"next_cursor,omitempty"`
-	Summary         string          `json:"summary"`
+	Rejected        bool                 `json:"rejected"`
+	RejectionReason string               `json:"rejection_reason,omitempty"`
+	Writes          []PlanningWrite      `json:"writes,omitempty"`
+	Calendars       []CalendarEntry      `json:"calendars,omitempty"`
+	Events          []EventEntry         `json:"events,omitempty"`
+	Tasks           []TaskEntry          `json:"tasks,omitempty"`
+	Agenda          []AgendaEntry        `json:"agenda,omitempty"`
+	Reminders       []ReminderEntry      `json:"reminders,omitempty"`
+	EventTaskLinks  []EventTaskLinkEntry `json:"event_task_links,omitempty"`
+	NextCursor      string               `json:"next_cursor,omitempty"`
+	Summary         string               `json:"summary"`
 }
 
 type PlanningWrite struct {
@@ -120,51 +124,60 @@ type CalendarEntry struct {
 }
 
 type EventEntry struct {
-	ID          string                `json:"id"`
-	CalendarID  string                `json:"calendar_id"`
-	Title       string                `json:"title"`
-	Description *string               `json:"description,omitempty"`
-	Location    *string               `json:"location,omitempty"`
-	StartAt     string                `json:"start_at,omitempty"`
-	EndAt       string                `json:"end_at,omitempty"`
-	StartDate   string                `json:"start_date,omitempty"`
-	EndDate     string                `json:"end_date,omitempty"`
-	Recurrence  *RecurrenceRuleResult `json:"recurrence,omitempty"`
-	Reminders   []ReminderRuleEntry   `json:"reminders,omitempty"`
+	ID            string                `json:"id"`
+	CalendarID    string                `json:"calendar_id"`
+	Title         string                `json:"title"`
+	Description   *string               `json:"description,omitempty"`
+	Location      *string               `json:"location,omitempty"`
+	StartAt       string                `json:"start_at,omitempty"`
+	EndAt         string                `json:"end_at,omitempty"`
+	StartDate     string                `json:"start_date,omitempty"`
+	EndDate       string                `json:"end_date,omitempty"`
+	Recurrence    *RecurrenceRuleResult `json:"recurrence,omitempty"`
+	Reminders     []ReminderRuleEntry   `json:"reminders,omitempty"`
+	LinkedTaskIDs []string              `json:"linked_task_ids,omitempty"`
 }
 
 type TaskEntry struct {
-	ID          string                `json:"id"`
-	CalendarID  string                `json:"calendar_id"`
-	Title       string                `json:"title"`
-	Description *string               `json:"description,omitempty"`
-	DueAt       string                `json:"due_at,omitempty"`
-	DueDate     string                `json:"due_date,omitempty"`
-	Recurrence  *RecurrenceRuleResult `json:"recurrence,omitempty"`
-	Reminders   []ReminderRuleEntry   `json:"reminders,omitempty"`
-	Priority    string                `json:"priority"`
-	Status      string                `json:"status"`
-	Tags        []string              `json:"tags"`
-	CompletedAt string                `json:"completed_at,omitempty"`
+	ID             string                `json:"id"`
+	CalendarID     string                `json:"calendar_id"`
+	Title          string                `json:"title"`
+	Description    *string               `json:"description,omitempty"`
+	DueAt          string                `json:"due_at,omitempty"`
+	DueDate        string                `json:"due_date,omitempty"`
+	Recurrence     *RecurrenceRuleResult `json:"recurrence,omitempty"`
+	Reminders      []ReminderRuleEntry   `json:"reminders,omitempty"`
+	Priority       string                `json:"priority"`
+	Status         string                `json:"status"`
+	Tags           []string              `json:"tags"`
+	LinkedEventIDs []string              `json:"linked_event_ids,omitempty"`
+	CompletedAt    string                `json:"completed_at,omitempty"`
 }
 
 type AgendaEntry struct {
-	Kind          string   `json:"kind"`
-	OccurrenceKey string   `json:"occurrence_key"`
-	CalendarID    string   `json:"calendar_id"`
-	SourceID      string   `json:"source_id"`
-	Title         string   `json:"title"`
-	Description   *string  `json:"description,omitempty"`
-	StartAt       string   `json:"start_at,omitempty"`
-	EndAt         string   `json:"end_at,omitempty"`
-	StartDate     string   `json:"start_date,omitempty"`
-	EndDate       string   `json:"end_date,omitempty"`
-	DueAt         string   `json:"due_at,omitempty"`
-	DueDate       string   `json:"due_date,omitempty"`
-	Priority      string   `json:"priority,omitempty"`
-	Status        string   `json:"status,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	CompletedAt   string   `json:"completed_at,omitempty"`
+	Kind           string   `json:"kind"`
+	OccurrenceKey  string   `json:"occurrence_key"`
+	CalendarID     string   `json:"calendar_id"`
+	SourceID       string   `json:"source_id"`
+	Title          string   `json:"title"`
+	Description    *string  `json:"description,omitempty"`
+	StartAt        string   `json:"start_at,omitempty"`
+	EndAt          string   `json:"end_at,omitempty"`
+	StartDate      string   `json:"start_date,omitempty"`
+	EndDate        string   `json:"end_date,omitempty"`
+	DueAt          string   `json:"due_at,omitempty"`
+	DueDate        string   `json:"due_date,omitempty"`
+	Priority       string   `json:"priority,omitempty"`
+	Status         string   `json:"status,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	LinkedTaskIDs  []string `json:"linked_task_ids,omitempty"`
+	LinkedEventIDs []string `json:"linked_event_ids,omitempty"`
+	CompletedAt    string   `json:"completed_at,omitempty"`
+}
+
+type EventTaskLinkEntry struct {
+	EventID string `json:"event_id"`
+	TaskID  string `json:"task_id"`
 }
 
 type ReminderRuleEntry struct {
@@ -214,6 +227,7 @@ type normalizedPlanningTaskRequest struct {
 	TaskPatch            domain.TaskPatch
 	ListOptions          domain.PageParams
 	TaskListOptions      domain.TaskListParams
+	EventTaskLinkFilter  domain.EventTaskLinkFilter
 	AgendaOptions        domain.AgendaParams
 	ReminderOptions      domain.ReminderQueryParams
 	TaskID               string
@@ -488,6 +502,12 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runDeleteEvent(ctx, api, request)
 	case PlanningTaskActionDeleteTask:
 		return runDeleteTask(ctx, api, request)
+	case PlanningTaskActionCreateEventTaskLink:
+		return runCreateEventTaskLink(ctx, api, request)
+	case PlanningTaskActionDeleteEventTaskLink:
+		return runDeleteEventTaskLink(ctx, api, request)
+	case PlanningTaskActionListEventTaskLinks:
+		return runListEventTaskLinks(ctx, api, request)
 	case PlanningTaskActionListAgenda:
 		return runListAgenda(ctx, api, request)
 	case PlanningTaskActionListEvents:
@@ -696,6 +716,47 @@ func runDeleteTask(ctx context.Context, api *localRuntime, request normalizedPla
 			Status: "deleted",
 		}},
 		Summary: "deleted task",
+	}, nil
+}
+
+func runCreateEventTaskLink(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	link, err := api.CreateEventTaskLink(ctx, request.EventID, request.TaskID)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "event_task_link",
+			ID:     link.EventID + ":" + link.TaskID,
+			Status: "created",
+		}},
+		EventTaskLinks: []EventTaskLinkEntry{eventTaskLinkEntry(link)},
+		Summary:        "created event task link",
+	}, nil
+}
+
+func runDeleteEventTaskLink(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	if err := api.DeleteEventTaskLink(ctx, request.EventID, request.TaskID); err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:   "event_task_link",
+			ID:     request.EventID + ":" + request.TaskID,
+			Status: "deleted",
+		}},
+		Summary: "deleted event task link",
+	}, nil
+}
+
+func runListEventTaskLinks(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	links, err := api.ListEventTaskLinks(ctx, request.EventTaskLinkFilter)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return PlanningTaskResult{
+		EventTaskLinks: eventTaskLinkEntries(links),
+		Summary:        fmt.Sprintf("returned %d event task links", len(links)),
 	}, nil
 }
 
@@ -971,6 +1032,25 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		}
 		normalized.TaskID = taskID
 		return normalized, ""
+	case PlanningTaskActionCreateEventTaskLink:
+		if rejection := normalizeEventTaskLinkRef(request, &normalized, true); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		return normalized, ""
+	case PlanningTaskActionDeleteEventTaskLink:
+		if rejection := normalizeEventTaskLinkRef(request, &normalized, true); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		return normalized, ""
+	case PlanningTaskActionListEventTaskLinks:
+		if rejection := normalizeEventTaskLinkRef(request, &normalized, false); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.EventTaskLinkFilter = domain.EventTaskLinkFilter{
+			EventID: normalized.EventID,
+			TaskID:  normalized.TaskID,
+		}
+		return normalized, ""
 	case PlanningTaskActionListAgenda:
 		from, rejection := parseRequiredTime("from", request.From)
 		if rejection != "" {
@@ -1048,6 +1128,31 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 	default:
 		return normalizedPlanningTaskRequest{}, fmt.Sprintf("unsupported planning task action %q", action)
 	}
+}
+
+func normalizeEventTaskLinkRef(request PlanningTaskRequest, normalized *normalizedPlanningTaskRequest, requireBoth bool) string {
+	eventID := strings.TrimSpace(request.EventID)
+	taskID := strings.TrimSpace(request.TaskID)
+	if requireBoth && eventID == "" {
+		return "event_id is required"
+	}
+	if requireBoth && taskID == "" {
+		return "task_id is required"
+	}
+	if eventID != "" {
+		if _, err := ulid.ParseStrict(eventID); err != nil {
+			return "event_id must be a valid ULID"
+		}
+		normalized.EventID = eventID
+	}
+	if taskID != "" {
+		if _, err := ulid.ParseStrict(taskID); err != nil {
+			return "task_id must be a valid ULID"
+		}
+		normalized.TaskID = taskID
+	}
+
+	return ""
 }
 
 func normalizeCalendarInput(request PlanningTaskRequest) (domain.Calendar, string) {
@@ -1864,15 +1969,16 @@ func eventEntries(events []domain.Event) []EventEntry {
 
 func eventEntry(event domain.Event) EventEntry {
 	out := EventEntry{
-		ID:          event.ID,
-		CalendarID:  event.CalendarID,
-		Title:       event.Title,
-		Description: cloneString(event.Description),
-		Location:    cloneString(event.Location),
-		StartDate:   stringValue(event.StartDate),
-		EndDate:     stringValue(event.EndDate),
-		Recurrence:  recurrenceResult(event.Recurrence),
-		Reminders:   reminderRuleEntries(event.Reminders),
+		ID:            event.ID,
+		CalendarID:    event.CalendarID,
+		Title:         event.Title,
+		Description:   cloneString(event.Description),
+		Location:      cloneString(event.Location),
+		StartDate:     stringValue(event.StartDate),
+		EndDate:       stringValue(event.EndDate),
+		Recurrence:    recurrenceResult(event.Recurrence),
+		Reminders:     reminderRuleEntries(event.Reminders),
+		LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 	}
 	if event.StartAt != nil {
 		out.StartAt = formatJSONTime(*event.StartAt)
@@ -1893,16 +1999,17 @@ func taskEntries(tasks []domain.Task) []TaskEntry {
 
 func taskEntry(task domain.Task) TaskEntry {
 	out := TaskEntry{
-		ID:          task.ID,
-		CalendarID:  task.CalendarID,
-		Title:       task.Title,
-		Description: cloneString(task.Description),
-		DueDate:     stringValue(task.DueDate),
-		Recurrence:  recurrenceResult(task.Recurrence),
-		Reminders:   reminderRuleEntries(task.Reminders),
-		Priority:    string(task.Priority),
-		Status:      string(task.Status),
-		Tags:        slices.Clone(task.Tags),
+		ID:             task.ID,
+		CalendarID:     task.CalendarID,
+		Title:          task.Title,
+		Description:    cloneString(task.Description),
+		DueDate:        stringValue(task.DueDate),
+		Recurrence:     recurrenceResult(task.Recurrence),
+		Reminders:      reminderRuleEntries(task.Reminders),
+		Priority:       string(task.Priority),
+		Status:         string(task.Status),
+		Tags:           slices.Clone(task.Tags),
+		LinkedEventIDs: slices.Clone(task.LinkedEventIDs),
 	}
 	if task.DueAt != nil {
 		out.DueAt = formatJSONTime(*task.DueAt)
@@ -1931,18 +2038,20 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 	out := make([]AgendaEntry, 0, len(items))
 	for _, item := range items {
 		entry := AgendaEntry{
-			Kind:          string(item.Kind),
-			OccurrenceKey: item.OccurrenceKey,
-			CalendarID:    item.CalendarID,
-			SourceID:      item.SourceID,
-			Title:         item.Title,
-			Description:   cloneString(item.Description),
-			StartDate:     stringValue(item.StartDate),
-			EndDate:       stringValue(item.EndDate),
-			DueDate:       stringValue(item.DueDate),
-			Priority:      string(item.Priority),
-			Status:        string(item.Status),
-			Tags:          slices.Clone(item.Tags),
+			Kind:           string(item.Kind),
+			OccurrenceKey:  item.OccurrenceKey,
+			CalendarID:     item.CalendarID,
+			SourceID:       item.SourceID,
+			Title:          item.Title,
+			Description:    cloneString(item.Description),
+			StartDate:      stringValue(item.StartDate),
+			EndDate:        stringValue(item.EndDate),
+			DueDate:        stringValue(item.DueDate),
+			Priority:       string(item.Priority),
+			Status:         string(item.Status),
+			Tags:           slices.Clone(item.Tags),
+			LinkedTaskIDs:  slices.Clone(item.LinkedTaskIDs),
+			LinkedEventIDs: slices.Clone(item.LinkedEventIDs),
 		}
 		if item.StartAt != nil {
 			entry.StartAt = formatJSONTime(*item.StartAt)
@@ -1959,6 +2068,21 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 		out = append(out, entry)
 	}
 	return out
+}
+
+func eventTaskLinkEntries(links []domain.EventTaskLink) []EventTaskLinkEntry {
+	out := make([]EventTaskLinkEntry, 0, len(links))
+	for _, link := range links {
+		out = append(out, eventTaskLinkEntry(link))
+	}
+	return out
+}
+
+func eventTaskLinkEntry(link domain.EventTaskLink) EventTaskLinkEntry {
+	return EventTaskLinkEntry{
+		EventID: link.EventID,
+		TaskID:  link.TaskID,
+	}
 }
 
 func reminderEntries(items []domain.PendingReminder) []ReminderEntry {

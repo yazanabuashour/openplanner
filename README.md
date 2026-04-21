@@ -88,6 +88,9 @@ Supported routine actions are:
 - `delete_calendar`
 - `delete_event`
 - `delete_task`
+- `create_event_task_link`
+- `delete_event_task_link`
+- `list_event_task_links`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -106,6 +109,19 @@ Tasks support optional metadata. `priority` is one of `low`, `medium`, or
 `done` and defaults to `todo`. `tags` is an array of lowercase labels using
 letters, digits, `_`, or `-`; `list_tasks` matches all supplied tags when
 filtering.
+
+Events and tasks can be linked explicitly for prep, follow-up, and agenda-based
+completion workflows. Use `create_event_task_link` with `event_id` and
+`task_id`, `list_event_task_links` with optional `event_id` and/or `task_id`,
+and `delete_event_task_link` with both IDs. Event responses include
+`linked_task_ids`; task responses include `linked_event_ids`; agenda event and
+task items include the corresponding linked IDs.
+
+```json
+{"action":"create_event_task_link","event_id":"<event-id>","task_id":"<task-id>"}
+{"action":"list_event_task_links","event_id":"<event-id>"}
+{"action":"delete_event_task_link","event_id":"<event-id>","task_id":"<task-id>"}
+```
 
 Events and tasks support optional reminder rules through `reminders`, an array
 of objects with positive `before_minutes` values. Reminder offsets are measured

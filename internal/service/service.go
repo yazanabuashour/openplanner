@@ -593,6 +593,81 @@ func (service *Service) DeleteTask(id string) error {
 	return nil
 }
 
+func (service *Service) CreateEventTaskLink(eventID string, taskID string) (domain.EventTaskLink, error) {
+	if err := validateResourceID("eventId", eventID); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	if err := validateResourceID("taskId", taskID); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	if _, err := service.GetEvent(eventID); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	if _, err := service.GetTask(taskID); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+
+	now := service.now()
+	link := domain.EventTaskLink{
+		EventID:   eventID,
+		TaskID:    taskID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := service.store.CreateEventTaskLink(link); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return domain.EventTaskLink{}, &ConflictError{Message: "event task link already exists"}
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.EventTaskLink{}, &NotFoundError{Message: "event or task not found"}
+		}
+
+		return domain.EventTaskLink{}, err
+	}
+
+	return link, nil
+}
+
+func (service *Service) DeleteEventTaskLink(eventID string, taskID string) error {
+	if err := validateResourceID("eventId", eventID); err != nil {
+		return err
+	}
+	if err := validateResourceID("taskId", taskID); err != nil {
+		return err
+	}
+	if _, err := service.GetEvent(eventID); err != nil {
+		return err
+	}
+	if _, err := service.GetTask(taskID); err != nil {
+		return err
+	}
+
+	if err := service.store.DeleteEventTaskLink(eventID, taskID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return &NotFoundError{Message: "event task link not found"}
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (service *Service) ListEventTaskLinks(filter domain.EventTaskLinkFilter) ([]domain.EventTaskLink, error) {
+	if filter.EventID != "" {
+		if err := validateResourceID("eventId", filter.EventID); err != nil {
+			return nil, err
+		}
+	}
+	if filter.TaskID != "" {
+		if err := validateResourceID("taskId", filter.TaskID); err != nil {
+			return nil, err
+		}
+	}
+
+	return service.store.ListEventTaskLinks(filter)
+}
+
 func (service *Service) CompleteTask(id string, request domain.TaskCompletionRequest) (domain.TaskCompletion, error) {
 	task, err := service.GetTask(id)
 	if err != nil {
@@ -1255,6 +1330,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 				Description:   cloneStringPtr(event.Description),
 				StartAt:       cloneTimePtr(&occurrence),
 				EndAt:         cloneTimePtr(&endAt),
+				LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 			}
 			if event.EndAt == nil {
 				item.EndAt = nil
@@ -1294,6 +1370,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 				Description:   cloneStringPtr(event.Description),
 				StartDate:     &startDate,
 				EndDate:       &endDate,
+				LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 			}
 			if spanDays == 1 {
 				item.EndDate = nil
@@ -1324,16 +1401,17 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 
 			key := occurrenceKey(task.ID, &occurrence, nil)
 			item := domain.AgendaItem{
-				Kind:          domain.AgendaItemKindTask,
-				OccurrenceKey: key,
-				CalendarID:    task.CalendarID,
-				SourceID:      task.ID,
-				Title:         task.Title,
-				Description:   cloneStringPtr(task.Description),
-				DueAt:         cloneTimePtr(&occurrence),
-				Priority:      task.Priority,
-				Status:        task.Status,
-				Tags:          slices.Clone(task.Tags),
+				Kind:           domain.AgendaItemKindTask,
+				OccurrenceKey:  key,
+				CalendarID:     task.CalendarID,
+				SourceID:       task.ID,
+				Title:          task.Title,
+				Description:    cloneStringPtr(task.Description),
+				DueAt:          cloneTimePtr(&occurrence),
+				Priority:       task.Priority,
+				Status:         task.Status,
+				Tags:           slices.Clone(task.Tags),
+				LinkedEventIDs: slices.Clone(task.LinkedEventIDs),
 			}
 			if task.Recurrence == nil {
 				item.CompletedAt = cloneTimePtr(task.CompletedAt)
@@ -1357,16 +1435,17 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 
 			key := occurrenceKey(task.ID, nil, &occurrence)
 			item := domain.AgendaItem{
-				Kind:          domain.AgendaItemKindTask,
-				OccurrenceKey: key,
-				CalendarID:    task.CalendarID,
-				SourceID:      task.ID,
-				Title:         task.Title,
-				Description:   cloneStringPtr(task.Description),
-				DueDate:       &occurrence,
-				Priority:      task.Priority,
-				Status:        task.Status,
-				Tags:          slices.Clone(task.Tags),
+				Kind:           domain.AgendaItemKindTask,
+				OccurrenceKey:  key,
+				CalendarID:     task.CalendarID,
+				SourceID:       task.ID,
+				Title:          task.Title,
+				Description:    cloneStringPtr(task.Description),
+				DueDate:        &occurrence,
+				Priority:       task.Priority,
+				Status:         task.Status,
+				Tags:           slices.Clone(task.Tags),
+				LinkedEventIDs: slices.Clone(task.LinkedEventIDs),
 			}
 			if task.Recurrence == nil {
 				item.CompletedAt = cloneTimePtr(task.CompletedAt)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,9 +25,11 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
+		"event_task_links",
+		"event_task_links_task_idx",
 		"events",
 		"events_calendar_idx",
 		"reminder_dismissals",
@@ -58,7 +61,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -131,7 +134,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -154,7 +157,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (4);
+		INSERT INTO schema_migrations (version) VALUES (5);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -167,7 +170,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 4 is newer than supported version 3") {
+	if !strings.Contains(err.Error(), "database schema version 5 is newer than supported version 4") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -318,6 +321,116 @@ func TestEventAndTaskRemindersPersistUpdateClearAndCascade(t *testing.T) {
 	}
 	if _, err := repository.GetReminder("rem-task-90"); err != ErrNotFound {
 		t.Fatalf("GetReminder(deleted task reminder) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestEventTaskLinksPersistListDeleteAndCascade(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	calendar := domain.Calendar{ID: "cal-links", Name: "Links", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(calendar); err != nil {
+		t.Fatalf("CreateCalendar(): %v", err)
+	}
+	event := domain.Event{
+		ID:         "event-links",
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartDate:  stringPtr("2026-04-21"),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repository.CreateEvent(event); err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	task := domain.Task{
+		ID:         "task-links",
+		CalendarID: calendar.ID,
+		Title:      "Prep",
+		DueDate:    stringPtr("2026-04-21"),
+		Priority:   domain.TaskPriorityMedium,
+		Status:     domain.TaskStatusTodo,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repository.CreateTask(task); err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+
+	link := domain.EventTaskLink{EventID: event.ID, TaskID: task.ID, CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateEventTaskLink(link); err != nil {
+		t.Fatalf("CreateEventTaskLink(): %v", err)
+	}
+	if err := repository.CreateEventTaskLink(link); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateEventTaskLink(duplicate) error = %v, want ErrConflict", err)
+	}
+
+	allLinks, err := repository.ListEventTaskLinks(domain.EventTaskLinkFilter{})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(all): %v", err)
+	}
+	if len(allLinks) != 1 || allLinks[0].EventID != event.ID || allLinks[0].TaskID != task.ID {
+		t.Fatalf("all links = %#v, want one event-task link", allLinks)
+	}
+	eventLinks, err := repository.ListEventTaskLinks(domain.EventTaskLinkFilter{EventID: event.ID})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(event): %v", err)
+	}
+	if len(eventLinks) != 1 {
+		t.Fatalf("event links = %#v, want one link", eventLinks)
+	}
+	taskLinks, err := repository.ListEventTaskLinks(domain.EventTaskLinkFilter{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(task): %v", err)
+	}
+	if len(taskLinks) != 1 {
+		t.Fatalf("task links = %#v, want one link", taskLinks)
+	}
+
+	storedEvent, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(): %v", err)
+	}
+	if !slices.Equal(storedEvent.LinkedTaskIDs, []string{task.ID}) {
+		t.Fatalf("event linked tasks = %v, want %v", storedEvent.LinkedTaskIDs, []string{task.ID})
+	}
+	storedTask, err := repository.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask(): %v", err)
+	}
+	if !slices.Equal(storedTask.LinkedEventIDs, []string{event.ID}) {
+		t.Fatalf("task linked events = %v, want %v", storedTask.LinkedEventIDs, []string{event.ID})
+	}
+
+	if err := repository.DeleteEventTaskLink(event.ID, task.ID); err != nil {
+		t.Fatalf("DeleteEventTaskLink(): %v", err)
+	}
+	if err := repository.DeleteEventTaskLink(event.ID, task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteEventTaskLink(missing) error = %v, want ErrNotFound", err)
+	}
+
+	if err := repository.CreateEventTaskLink(link); err != nil {
+		t.Fatalf("CreateEventTaskLink(recreate): %v", err)
+	}
+	if err := repository.DeleteEvent(event.ID); err != nil {
+		t.Fatalf("DeleteEvent(): %v", err)
+	}
+	afterCascade, err := repository.ListEventTaskLinks(domain.EventTaskLinkFilter{})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(after cascade): %v", err)
+	}
+	if len(afterCascade) != 0 {
+		t.Fatalf("links after cascade = %#v, want none", afterCascade)
 	}
 }
 
@@ -503,4 +616,8 @@ func assertSchemaObjects(t *testing.T, db *sql.DB, want []string) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("schema objects = %v, want %v", got, want)
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

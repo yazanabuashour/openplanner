@@ -32,10 +32,15 @@ Supported routine actions are:
 - `delete_calendar`
 - `delete_event`
 - `delete_task`
+- `create_event_task_link`
+- `delete_event_task_link`
+- `list_event_task_links`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
 - `complete_task`
+- `list_pending_reminders`
+- `dismiss_reminder`
 - `validate`
 
 For event and task creation, prefer `calendar_name`. The runner ensures that
@@ -50,6 +55,12 @@ matching items first, then delete by the returned `event_id` or `task_id`.
 Calendars may be deleted by exactly one of `calendar_id` or `calendar_name`,
 but only when they are empty; calendar deletion never cascades to contained
 events or tasks.
+
+Use event-task links for explicit prep or follow-up relationships. Create and
+delete links with both `event_id` and `task_id`; list links with optional
+`event_id` and/or `task_id`. Event results expose `linked_task_ids`, task
+results expose `linked_event_ids`, and agenda items expose whichever linked IDs
+apply to that item.
 
 Update payloads use patch semantics. Omit a field to preserve it, send a
 non-null value to set it, and send `null` to clear clearable optional fields.
@@ -108,7 +119,8 @@ checkout.
 ## Runner Pattern
 
 Pipe one JSON request to `openplanner planning` and answer only from JSON
-`writes`, `calendars`, `events`, `tasks`, `agenda`, `reminders`, or
+`writes`, `calendars`, `events`, `tasks`, `agenda`, `reminders`,
+`event_task_links`, or
 `rejection_reason`. Agenda results are already chronologically ordered. Pending
 reminder results are already chronologically ordered.
 
@@ -148,6 +160,15 @@ Tasks:
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
 {"action":"delete_task","task_id":"<id-from-prior-runner-result>"}
+```
+
+Event-task links:
+
+```json
+{"action":"create_event_task_link","event_id":"<id-from-prior-runner-result>","task_id":"<id-from-prior-runner-result>"}
+{"action":"list_event_task_links","event_id":"<id-from-prior-runner-result>"}
+{"action":"list_event_task_links","task_id":"<id-from-prior-runner-result>"}
+{"action":"delete_event_task_link","event_id":"<id-from-prior-runner-result>","task_id":"<id-from-prior-runner-result>"}
 ```
 
 Lists:

@@ -78,19 +78,20 @@ type CalendarPatch struct {
 }
 
 type Event struct {
-	ID          string
-	CalendarID  string
-	Title       string
-	Description *string
-	Location    *string
-	StartAt     *time.Time
-	EndAt       *time.Time
-	StartDate   *string
-	EndDate     *string
-	Recurrence  *RecurrenceRule
-	Reminders   []ReminderRule
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            string
+	CalendarID    string
+	Title         string
+	Description   *string
+	Location      *string
+	StartAt       *time.Time
+	EndAt         *time.Time
+	StartDate     *string
+	EndDate       *string
+	Recurrence    *RecurrenceRule
+	Reminders     []ReminderRule
+	LinkedTaskIDs []string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type EventPatch struct {
@@ -106,20 +107,21 @@ type EventPatch struct {
 }
 
 type Task struct {
-	ID          string
-	CalendarID  string
-	Title       string
-	Description *string
-	DueAt       *time.Time
-	DueDate     *string
-	Recurrence  *RecurrenceRule
-	Reminders   []ReminderRule
-	Priority    TaskPriority
-	Status      TaskStatus
-	Tags        []string
-	CompletedAt *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             string
+	CalendarID     string
+	Title          string
+	Description    *string
+	DueAt          *time.Time
+	DueDate        *string
+	Recurrence     *RecurrenceRule
+	Reminders      []ReminderRule
+	Priority       TaskPriority
+	Status         TaskStatus
+	Tags           []string
+	LinkedEventIDs []string
+	CompletedAt    *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type TaskPatch struct {
@@ -202,22 +204,36 @@ const (
 )
 
 type AgendaItem struct {
-	Kind          AgendaItemKind
-	OccurrenceKey string
-	CalendarID    string
-	SourceID      string
-	Title         string
-	Description   *string
-	StartAt       *time.Time
-	EndAt         *time.Time
-	StartDate     *string
-	EndDate       *string
-	DueAt         *time.Time
-	DueDate       *string
-	Priority      TaskPriority
-	Status        TaskStatus
-	Tags          []string
-	CompletedAt   *time.Time
+	Kind           AgendaItemKind
+	OccurrenceKey  string
+	CalendarID     string
+	SourceID       string
+	Title          string
+	Description    *string
+	StartAt        *time.Time
+	EndAt          *time.Time
+	StartDate      *string
+	EndDate        *string
+	DueAt          *time.Time
+	DueDate        *string
+	Priority       TaskPriority
+	Status         TaskStatus
+	Tags           []string
+	LinkedTaskIDs  []string
+	LinkedEventIDs []string
+	CompletedAt    *time.Time
+}
+
+type EventTaskLink struct {
+	EventID   string
+	TaskID    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type EventTaskLinkFilter struct {
+	EventID string
+	TaskID  string
 }
 
 type PageParams struct {

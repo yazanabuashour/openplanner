@@ -168,6 +168,180 @@ func TestListAgendaRejectsInvalidCursor(t *testing.T) {
 	}
 }
 
+func TestEventTaskLinksCreateListDeleteAndAgendaExposure(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartDate:  stringPtr("2026-04-16"),
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Prep notes",
+		DueDate:    stringPtr("2026-04-16"),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+
+	link, err := svc.CreateEventTaskLink(event.ID, task.ID)
+	if err != nil {
+		t.Fatalf("CreateEventTaskLink(): %v", err)
+	}
+	if link.EventID != event.ID || link.TaskID != task.ID {
+		t.Fatalf("link = %#v, want event/task ids", link)
+	}
+
+	eventLinks, err := svc.ListEventTaskLinks(domain.EventTaskLinkFilter{EventID: event.ID})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(event): %v", err)
+	}
+	if len(eventLinks) != 1 || eventLinks[0].TaskID != task.ID {
+		t.Fatalf("event links = %#v, want linked task", eventLinks)
+	}
+	taskLinks, err := svc.ListEventTaskLinks(domain.EventTaskLinkFilter{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(task): %v", err)
+	}
+	if len(taskLinks) != 1 || taskLinks[0].EventID != event.ID {
+		t.Fatalf("task links = %#v, want linked event", taskLinks)
+	}
+
+	storedEvent, err := svc.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(): %v", err)
+	}
+	if !slices.Equal(storedEvent.LinkedTaskIDs, []string{task.ID}) {
+		t.Fatalf("event linked tasks = %v, want %v", storedEvent.LinkedTaskIDs, []string{task.ID})
+	}
+	storedTask, err := svc.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask(): %v", err)
+	}
+	if !slices.Equal(storedTask.LinkedEventIDs, []string{event.ID}) {
+		t.Fatalf("task linked events = %v, want %v", storedTask.LinkedEventIDs, []string{event.ID})
+	}
+
+	agenda, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(agenda.Items) != 2 {
+		t.Fatalf("agenda = %#v, want two linked items", agenda.Items)
+	}
+	for _, item := range agenda.Items {
+		switch item.Kind {
+		case domain.AgendaItemKindEvent:
+			if !slices.Equal(item.LinkedTaskIDs, []string{task.ID}) {
+				t.Fatalf("event agenda linked tasks = %v, want %v", item.LinkedTaskIDs, []string{task.ID})
+			}
+		case domain.AgendaItemKindTask:
+			if !slices.Equal(item.LinkedEventIDs, []string{event.ID}) {
+				t.Fatalf("task agenda linked events = %v, want %v", item.LinkedEventIDs, []string{event.ID})
+			}
+		}
+	}
+
+	if err := svc.DeleteEventTaskLink(event.ID, task.ID); err != nil {
+		t.Fatalf("DeleteEventTaskLink(): %v", err)
+	}
+	linksAfterDelete, err := svc.ListEventTaskLinks(domain.EventTaskLinkFilter{})
+	if err != nil {
+		t.Fatalf("ListEventTaskLinks(after delete): %v", err)
+	}
+	if len(linksAfterDelete) != 0 {
+		t.Fatalf("links after delete = %#v, want none", linksAfterDelete)
+	}
+}
+
+func TestEventTaskLinkValidationRejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartDate:  stringPtr("2026-04-16"),
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Prep",
+		DueDate:    stringPtr("2026-04-16"),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+
+	_, err = svc.CreateEventTaskLink("not-a-ulid", task.ID)
+	if err == nil {
+		t.Fatal("CreateEventTaskLink(invalid event) error = nil, want validation error")
+	}
+	var validationErr *service.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("CreateEventTaskLink(invalid event) error = %T, want ValidationError", err)
+	}
+
+	_, err = svc.CreateEventTaskLink(event.ID, "not-a-ulid")
+	if err == nil {
+		t.Fatal("CreateEventTaskLink(invalid task) error = nil, want validation error")
+	}
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("CreateEventTaskLink(invalid task) error = %T, want ValidationError", err)
+	}
+
+	missingID := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	_, err = svc.CreateEventTaskLink(missingID, task.ID)
+	if err == nil {
+		t.Fatal("CreateEventTaskLink(missing event) error = nil, want not found")
+	}
+	var notFoundErr *service.NotFoundError
+	if !errors.As(err, &notFoundErr) {
+		t.Fatalf("CreateEventTaskLink(missing event) error = %T, want NotFoundError", err)
+	}
+
+	_, err = svc.CreateEventTaskLink(event.ID, task.ID)
+	if err != nil {
+		t.Fatalf("CreateEventTaskLink(): %v", err)
+	}
+	_, err = svc.CreateEventTaskLink(event.ID, task.ID)
+	if err == nil {
+		t.Fatal("CreateEventTaskLink(duplicate) error = nil, want conflict")
+	}
+	var conflictErr *service.ConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("CreateEventTaskLink(duplicate) error = %T, want ConflictError", err)
+	}
+
+	if err := svc.DeleteEventTaskLink(event.ID, missingID); err == nil {
+		t.Fatal("DeleteEventTaskLink(missing task) error = nil, want not found")
+	} else if !errors.As(err, &notFoundErr) {
+		t.Fatalf("DeleteEventTaskLink(missing task) error = %T, want NotFoundError", err)
+	}
+	if err := svc.DeleteEventTaskLink(event.ID, task.ID); err != nil {
+		t.Fatalf("DeleteEventTaskLink(): %v", err)
+	}
+	if err := svc.DeleteEventTaskLink(event.ID, task.ID); err == nil {
+		t.Fatal("DeleteEventTaskLink(missing link) error = nil, want not found")
+	} else if !errors.As(err, &notFoundErr) {
+		t.Fatalf("DeleteEventTaskLink(missing link) error = %T, want NotFoundError", err)
+	}
+}
+
 func TestListEndpointsRejectInvalidCalendarFilter(t *testing.T) {
 	t.Parallel()
 

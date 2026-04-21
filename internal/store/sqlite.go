@@ -135,6 +135,21 @@ var migrations = []migration{
 			);
 		`,
 	},
+	{
+		version: 4,
+		name:    "event task links",
+		sql: `
+			CREATE TABLE IF NOT EXISTS event_task_links (
+				event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+				task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (event_id, task_id)
+			);
+
+			CREATE INDEX IF NOT EXISTS event_task_links_task_idx ON event_task_links(task_id, event_id);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -316,6 +331,9 @@ func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 	if err := store.loadEventReminders(events); err != nil {
 		return nil, err
 	}
+	if err := store.loadEventLinkedTaskIDs(events); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -338,6 +356,9 @@ func (store *Store) GetEvent(id string) (domain.Event, error) {
 
 	events := []domain.Event{event}
 	if err := store.loadEventReminders(events); err != nil {
+		return domain.Event{}, err
+	}
+	if err := store.loadEventLinkedTaskIDs(events); err != nil {
 		return domain.Event{}, err
 	}
 
@@ -476,6 +497,9 @@ func (store *Store) ListTasks(params domain.TaskListParams) ([]domain.Task, erro
 	if err := store.loadTaskReminders(tasks); err != nil {
 		return nil, err
 	}
+	if err := store.loadTaskLinkedEventIDs(tasks); err != nil {
+		return nil, err
+	}
 	if len(params.Tags) == 0 {
 		return tasks, nil
 	}
@@ -508,6 +532,9 @@ func (store *Store) GetTask(id string) (domain.Task, error) {
 
 	tasks := []domain.Task{task}
 	if err := store.loadTaskReminders(tasks); err != nil {
+		return domain.Task{}, err
+	}
+	if err := store.loadTaskLinkedEventIDs(tasks); err != nil {
 		return domain.Task{}, err
 	}
 
@@ -567,6 +594,64 @@ func (store *Store) DeleteTask(id string) error {
 	}
 
 	return nil
+}
+
+func (store *Store) CreateEventTaskLink(link domain.EventTaskLink) error {
+	_, err := store.db.Exec(`
+		INSERT INTO event_task_links (event_id, task_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+	`, link.EventID, link.TaskID, formatTime(link.CreatedAt), formatTime(link.UpdatedAt))
+	if err != nil {
+		return mapWriteError(err)
+	}
+
+	return nil
+}
+
+func (store *Store) DeleteEventTaskLink(eventID string, taskID string) error {
+	result, err := store.db.Exec(`
+		DELETE FROM event_task_links
+		WHERE event_id = ? AND task_id = ?
+	`, eventID, taskID)
+	if err != nil {
+		return fmt.Errorf("delete event task link: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (store *Store) ListEventTaskLinks(filter domain.EventTaskLinkFilter) ([]domain.EventTaskLink, error) {
+	query := `
+		SELECT event_id, task_id, created_at, updated_at
+		FROM event_task_links
+	`
+	args := []any{}
+	where := []string{}
+	if filter.EventID != "" {
+		where = append(where, `event_id = ?`)
+		args = append(args, filter.EventID)
+	}
+	if filter.TaskID != "" {
+		where = append(where, `task_id = ?`)
+		args = append(args, filter.TaskID)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY created_at DESC, event_id DESC, task_id DESC`
+
+	rows, err := store.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list event task links: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	return scanEventTaskLinks(rows)
 }
 
 func (store *Store) MarkTaskCompleted(taskID string, completedAt time.Time) error {
@@ -833,6 +918,36 @@ func (store *Store) loadTaskReminders(tasks []domain.Task) error {
 	return nil
 }
 
+func (store *Store) loadEventLinkedTaskIDs(events []domain.Event) error {
+	eventIDs := make([]string, 0, len(events))
+	for _, event := range events {
+		eventIDs = append(eventIDs, event.ID)
+	}
+	byEvent, err := store.loadLinkedTaskIDs(eventIDs)
+	if err != nil {
+		return err
+	}
+	for index := range events {
+		events[index].LinkedTaskIDs = byEvent[events[index].ID]
+	}
+	return nil
+}
+
+func (store *Store) loadTaskLinkedEventIDs(tasks []domain.Task) error {
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
+	}
+	byTask, err := store.loadLinkedEventIDs(taskIDs)
+	if err != nil {
+		return err
+	}
+	for index := range tasks {
+		tasks[index].LinkedEventIDs = byTask[tasks[index].ID]
+	}
+	return nil
+}
+
 func (store *Store) loadReminders(ownerKind domain.ReminderOwnerKind, ownerIDs []string) (map[string][]domain.ReminderRule, error) {
 	byOwner := make(map[string][]domain.ReminderRule, len(ownerIDs))
 	if len(ownerIDs) == 0 {
@@ -876,6 +991,86 @@ func (store *Store) loadReminders(ownerKind domain.ReminderOwnerKind, ownerIDs [
 	}
 
 	return byOwner, nil
+}
+
+func (store *Store) loadLinkedTaskIDs(eventIDs []string) (map[string][]string, error) {
+	byEvent := make(map[string][]string, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return byEvent, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(eventIDs)), ",")
+	args := make([]any, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		args = append(args, eventID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT event_id, task_id
+		FROM event_task_links
+		WHERE event_id IN (`+placeholders+`)
+		ORDER BY event_id ASC, task_id ASC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load linked task ids: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var eventID string
+		var taskID string
+		if err := rows.Scan(&eventID, &taskID); err != nil {
+			return nil, fmt.Errorf("scan linked task id: %w", err)
+		}
+		byEvent[eventID] = append(byEvent[eventID], taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate linked task ids: %w", err)
+	}
+
+	return byEvent, nil
+}
+
+func (store *Store) loadLinkedEventIDs(taskIDs []string) (map[string][]string, error) {
+	byTask := make(map[string][]string, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return byTask, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(taskIDs)), ",")
+	args := make([]any, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		args = append(args, taskID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT task_id, event_id
+		FROM event_task_links
+		WHERE task_id IN (`+placeholders+`)
+		ORDER BY task_id ASC, event_id ASC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load linked event ids: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var taskID string
+		var eventID string
+		if err := rows.Scan(&taskID, &eventID); err != nil {
+			return nil, fmt.Errorf("scan linked event id: %w", err)
+		}
+		byTask[taskID] = append(byTask[taskID], eventID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate linked event ids: %w", err)
+	}
+
+	return byTask, nil
 }
 
 func (store *Store) migrate() error {
@@ -1139,6 +1334,36 @@ func scanReminder(scanner interface {
 	reminder.CreatedAt = parseStoredTime(createdAt)
 	reminder.UpdatedAt = parseStoredTime(updatedAt)
 	return reminder, nil
+}
+
+func scanEventTaskLinks(rows *sql.Rows) ([]domain.EventTaskLink, error) {
+	var links []domain.EventTaskLink
+	for rows.Next() {
+		link, err := scanEventTaskLink(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan event task link: %w", err)
+		}
+		links = append(links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate event task links: %w", err)
+	}
+
+	return links, nil
+}
+
+func scanEventTaskLink(scanner interface {
+	Scan(dest ...any) error
+}) (domain.EventTaskLink, error) {
+	var link domain.EventTaskLink
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(&link.EventID, &link.TaskID, &createdAt, &updatedAt); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	link.CreatedAt = parseStoredTime(createdAt)
+	link.UpdatedAt = parseStoredTime(updatedAt)
+	return link, nil
 }
 
 func marshalTags(tags []string) (string, error) {

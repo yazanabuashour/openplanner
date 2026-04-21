@@ -276,6 +276,39 @@ func (runtime *localRuntime) ListTasks(ctx context.Context, params domain.TaskLi
 	return service.ListTasks(params)
 }
 
+func (runtime *localRuntime) CreateEventTaskLink(ctx context.Context, eventID string, taskID string) (domain.EventTaskLink, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.EventTaskLink{}, err
+	}
+	return service.CreateEventTaskLink(eventID, taskID)
+}
+
+func (runtime *localRuntime) DeleteEventTaskLink(ctx context.Context, eventID string, taskID string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteEventTaskLink(eventID, taskID)
+}
+
+func (runtime *localRuntime) ListEventTaskLinks(ctx context.Context, filter domain.EventTaskLinkFilter) ([]domain.EventTaskLink, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return nil, err
+	}
+	return service.ListEventTaskLinks(filter)
+}
+
 func (runtime *localRuntime) CompleteTask(ctx context.Context, taskID string, input domain.TaskCompletionRequest) (domain.TaskCompletion, error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.TaskCompletion{}, err

@@ -688,6 +688,206 @@ func TestRunPlanningTaskRecurringReminderPendingOccurrences(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskEventTaskLinksCreateListDeleteAndExposeIDs(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Planning",
+		StartDate:    "2026-04-16",
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if event.Rejected || len(event.Events) != 1 {
+		t.Fatalf("event result = %#v, want stored event", event)
+	}
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Prep notes",
+		DueDate:      "2026-04-16",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if task.Rejected || len(task.Tasks) != 1 {
+		t.Fatalf("task result = %#v, want stored task", task)
+	}
+
+	created, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionCreateEventTaskLink,
+		EventID: event.Events[0].ID,
+		TaskID:  task.Tasks[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("create event task link: %v", err)
+	}
+	if created.Rejected || len(created.EventTaskLinks) != 1 || created.EventTaskLinks[0].EventID != event.Events[0].ID || created.EventTaskLinks[0].TaskID != task.Tasks[0].ID {
+		t.Fatalf("created link = %#v, want event-task link", created)
+	}
+
+	listed, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListEventTaskLinks,
+	})
+	if err != nil {
+		t.Fatalf("list links: %v", err)
+	}
+	if listed.Rejected || len(listed.EventTaskLinks) != 1 {
+		t.Fatalf("listed links = %#v, want one link", listed)
+	}
+	filteredByEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionListEventTaskLinks,
+		EventID: event.Events[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("list links by event: %v", err)
+	}
+	if filteredByEvent.Rejected || len(filteredByEvent.EventTaskLinks) != 1 {
+		t.Fatalf("event-filtered links = %#v, want one link", filteredByEvent)
+	}
+	filteredByTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListEventTaskLinks,
+		TaskID: task.Tasks[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("list links by task: %v", err)
+	}
+	if filteredByTask.Rejected || len(filteredByTask.EventTaskLinks) != 1 {
+		t.Fatalf("task-filtered links = %#v, want one link", filteredByTask)
+	}
+
+	limit := 10
+	events, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListEvents,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if events.Rejected || len(events.Events) != 1 || !slices.Equal(events.Events[0].LinkedTaskIDs, []string{task.Tasks[0].ID}) {
+		t.Fatalf("events = %#v, want linked task id", events)
+	}
+	tasks, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListTasks,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if tasks.Rejected || len(tasks.Tasks) != 1 || !slices.Equal(tasks.Tasks[0].LinkedEventIDs, []string{event.Events[0].ID}) {
+		t.Fatalf("tasks = %#v, want linked event id", tasks)
+	}
+
+	agenda, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListAgenda,
+		From:   "2026-04-16T00:00:00Z",
+		To:     "2026-04-17T00:00:00Z",
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("list agenda: %v", err)
+	}
+	if agenda.Rejected || len(agenda.Agenda) != 2 {
+		t.Fatalf("agenda = %#v, want two linked items", agenda)
+	}
+	for _, item := range agenda.Agenda {
+		switch item.Kind {
+		case "event":
+			if !slices.Equal(item.LinkedTaskIDs, []string{task.Tasks[0].ID}) {
+				t.Fatalf("event agenda linked tasks = %v, want %v", item.LinkedTaskIDs, []string{task.Tasks[0].ID})
+			}
+		case "task":
+			if !slices.Equal(item.LinkedEventIDs, []string{event.Events[0].ID}) {
+				t.Fatalf("task agenda linked events = %v, want %v", item.LinkedEventIDs, []string{event.Events[0].ID})
+			}
+		}
+	}
+
+	deleted, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionDeleteEventTaskLink,
+		EventID: event.Events[0].ID,
+		TaskID:  task.Tasks[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("delete link: %v", err)
+	}
+	if deleted.Rejected || len(deleted.Writes) != 1 || deleted.Writes[0].Kind != "event_task_link" || deleted.Writes[0].Status != "deleted" {
+		t.Fatalf("deleted link = %#v, want deleted write", deleted)
+	}
+
+	afterDelete, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListEventTaskLinks,
+	})
+	if err != nil {
+		t.Fatalf("list links after delete: %v", err)
+	}
+	if afterDelete.Rejected || len(afterDelete.EventTaskLinks) != 0 {
+		t.Fatalf("links after delete = %#v, want none", afterDelete)
+	}
+}
+
+func TestRunPlanningTaskEventTaskLinkRejections(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	invalidCases := []PlanningTaskRequest{
+		{Action: PlanningTaskActionCreateEventTaskLink},
+		{Action: PlanningTaskActionCreateEventTaskLink, EventID: "not-a-ulid", TaskID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+		{Action: PlanningTaskActionCreateEventTaskLink, EventID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", TaskID: "not-a-ulid"},
+		{Action: PlanningTaskActionDeleteEventTaskLink, EventID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+		{Action: PlanningTaskActionListEventTaskLinks, EventID: "not-a-ulid"},
+	}
+	for index, request := range invalidCases {
+		result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, request)
+		if err != nil {
+			t.Fatalf("RunPlanningTask(invalid %d) error = %v", index, err)
+		}
+		if !result.Rejected || result.RejectionReason == "" {
+			t.Fatalf("result %d = %#v, want rejection", index, result)
+		}
+		if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+			t.Fatalf("database directory exists after validation rejection: %v", err)
+		}
+	}
+
+	options := testOptions(t)
+	ctx := context.Background()
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Prep",
+		DueDate:      "2026-04-16",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	missingEvent := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	missingResult, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionCreateEventTaskLink,
+		EventID: missingEvent,
+		TaskID:  task.Tasks[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("create link with missing event: %v", err)
+	}
+	if !missingResult.Rejected || missingResult.RejectionReason == "" {
+		t.Fatalf("missing event result = %#v, want rejection", missingResult)
+	}
+	links, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListEventTaskLinks})
+	if err != nil {
+		t.Fatalf("list links: %v", err)
+	}
+	if links.Rejected || len(links.EventTaskLinks) != 0 {
+		t.Fatalf("links after missing event rejection = %#v, want none", links)
+	}
+}
+
 func TestRunPlanningTaskReminderRejectionsBeforeDatabaseCreation(t *testing.T) {
 	t.Parallel()
 
