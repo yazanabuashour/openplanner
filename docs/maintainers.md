@@ -24,7 +24,7 @@ surface.
 ## SQLite migrations
 
 SQLite schema changes live in `internal/store/sqlite.go` as ordered embedded
-migrations. The current bootstrap schema is migration version `1`, recorded in
+migrations. Applied versions are recorded in
 `schema_migrations(version INTEGER PRIMARY KEY)`.
 
 When changing the local data model:

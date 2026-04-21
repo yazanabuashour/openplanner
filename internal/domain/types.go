@@ -22,6 +22,22 @@ const (
 	WeekdaySunday    Weekday = "SU"
 )
 
+type TaskPriority string
+
+const (
+	TaskPriorityLow    TaskPriority = "low"
+	TaskPriorityMedium TaskPriority = "medium"
+	TaskPriorityHigh   TaskPriority = "high"
+)
+
+type TaskStatus string
+
+const (
+	TaskStatusTodo       TaskStatus = "todo"
+	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusDone       TaskStatus = "done"
+)
+
 type RecurrenceRule struct {
 	Frequency  RecurrenceFrequency
 	Interval   int32
@@ -95,6 +111,9 @@ type Task struct {
 	DueAt       *time.Time
 	DueDate     *string
 	Recurrence  *RecurrenceRule
+	Priority    TaskPriority
+	Status      TaskStatus
+	Tags        []string
 	CompletedAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -106,6 +125,9 @@ type TaskPatch struct {
 	DueAt       PatchField[time.Time]
 	DueDate     PatchField[string]
 	Recurrence  PatchField[RecurrenceRule]
+	Priority    PatchField[TaskPriority]
+	Status      PatchField[TaskStatus]
+	Tags        PatchField[[]string]
 }
 
 type TaskCompletionRequest struct {
@@ -141,6 +163,9 @@ type AgendaItem struct {
 	EndDate       *string
 	DueAt         *time.Time
 	DueDate       *string
+	Priority      TaskPriority
+	Status        TaskStatus
+	Tags          []string
 	CompletedAt   *time.Time
 }
 
@@ -148,6 +173,13 @@ type PageParams struct {
 	Cursor     string
 	Limit      int
 	CalendarID string
+}
+
+type TaskListParams struct {
+	PageParams
+	Priority TaskPriority
+	Status   TaskStatus
+	Tags     []string
 }
 
 type AgendaParams struct {

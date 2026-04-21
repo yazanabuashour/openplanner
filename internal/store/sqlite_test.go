@@ -24,7 +24,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1})
+	assertMigrationVersions(t, repository.db, []int{1, 2})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"events",
@@ -33,6 +33,9 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"task_occurrence_states",
 		"tasks",
 		"tasks_calendar_idx",
+		"tasks_calendar_status_priority_idx",
+		"tasks_priority_idx",
+		"tasks_status_idx",
 	})
 }
 
@@ -52,7 +55,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1})
+	assertMigrationVersions(t, repository.db, []int{1, 2})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -70,12 +73,15 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		t.Fatalf("events = %#v, want legacy event", events)
 	}
 
-	tasks, err := repository.ListTasks("")
+	tasks, err := repository.ListTasks(domain.TaskListParams{})
 	if err != nil {
 		t.Fatalf("ListTasks(): %v", err)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "task-legacy" || tasks[0].Title != "Legacy task" {
 		t.Fatalf("tasks = %#v, want legacy task", tasks)
+	}
+	if tasks[0].Priority != domain.TaskPriorityMedium || tasks[0].Status != domain.TaskStatusTodo || len(tasks[0].Tags) != 0 {
+		t.Fatalf("legacy task metadata = priority:%q status:%q tags:%v, want medium/todo/[]", tasks[0].Priority, tasks[0].Status, tasks[0].Tags)
 	}
 
 	completions, err := repository.ListTaskCompletions([]string{"task-legacy"})
@@ -122,7 +128,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1})
+	assertMigrationVersions(t, reopened.db, []int{1, 2})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -145,7 +151,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (2);
+		INSERT INTO schema_migrations (version) VALUES (3);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -158,8 +164,36 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 2 is newer than supported version 1") {
+	if !strings.Contains(err.Error(), "database schema version 3 is newer than supported version 2") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
+	}
+}
+
+func TestOpenBackfillsCompletedLegacyTaskStatus(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "openplanner.db")
+	createLegacyCompletedTaskDatabase(t, databasePath)
+
+	repository, err := Open(databasePath)
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	tasks, err := repository.ListTasks(domain.TaskListParams{})
+	if err != nil {
+		t.Fatalf("ListTasks(): %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks length = %d, want 1", len(tasks))
+	}
+	if tasks[0].Status != domain.TaskStatusDone || tasks[0].Priority != domain.TaskPriorityMedium {
+		t.Fatalf("task metadata = priority:%q status:%q, want medium/done", tasks[0].Priority, tasks[0].Status)
 	}
 }
 
@@ -261,6 +295,26 @@ func createLegacyBootstrapDatabase(t *testing.T, databasePath string) {
 		);
 	`); err != nil {
 		t.Fatalf("seed legacy database: %v", err)
+	}
+}
+
+func createLegacyCompletedTaskDatabase(t *testing.T, databasePath string) {
+	t.Helper()
+
+	createLegacyBootstrapDatabase(t, databasePath)
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("sql.Open(): %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close(seed): %v", err)
+		}
+	}()
+
+	if _, err := db.Exec(`UPDATE tasks SET completed_at = '2026-04-20T18:00:00Z' WHERE id = 'task-legacy'`); err != nil {
+		t.Fatalf("mark legacy task completed: %v", err)
 	}
 }
 

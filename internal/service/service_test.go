@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestListTasksPaginatesWithCursor(t *testing.T) {
 		}
 	}
 
-	firstPage, err := svc.ListTasks(domain.PageParams{Limit: 2})
+	firstPage, err := svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{Limit: 2}})
 	if err != nil {
 		t.Fatalf("ListTasks(first page): %v", err)
 	}
@@ -89,7 +90,7 @@ func TestListTasksPaginatesWithCursor(t *testing.T) {
 		t.Fatal("first page next cursor = nil")
 	}
 
-	secondPage, err := svc.ListTasks(domain.PageParams{Cursor: *firstPage.NextCursor, Limit: 2})
+	secondPage, err := svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{Cursor: *firstPage.NextCursor, Limit: 2}})
 	if err != nil {
 		t.Fatalf("ListTasks(second page): %v", err)
 	}
@@ -114,7 +115,7 @@ func TestListTasksRejectsStaleCursor(t *testing.T) {
 		}
 	}
 
-	firstPage, err := svc.ListTasks(domain.PageParams{Limit: 1})
+	firstPage, err := svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{Limit: 1}})
 	if err != nil {
 		t.Fatalf("ListTasks(first page): %v", err)
 	}
@@ -125,7 +126,7 @@ func TestListTasksRejectsStaleCursor(t *testing.T) {
 		t.Fatalf("DeleteTask(): %v", err)
 	}
 
-	_, err = svc.ListTasks(domain.PageParams{Cursor: *firstPage.NextCursor, Limit: 1})
+	_, err = svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{Cursor: *firstPage.NextCursor, Limit: 1}})
 	if err == nil {
 		t.Fatal("ListTasks(stale cursor) error = nil, want validation error")
 	}
@@ -186,7 +187,7 @@ func TestListEndpointsRejectInvalidCalendarFilter(t *testing.T) {
 		{
 			name: "tasks",
 			call: func() error {
-				_, err := svc.ListTasks(domain.PageParams{CalendarID: "not-a-ulid"})
+				_, err := svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{CalendarID: "not-a-ulid"}})
 				return err
 			},
 		},
@@ -457,6 +458,186 @@ func TestUpdateTaskPatchClearAndSwitchDueMode(t *testing.T) {
 	var validationErr *service.ValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("UpdateTask(clear title) error = %T, want ValidationError", err)
+	}
+}
+
+func TestTaskMetadataDefaultsUpdateFiltersAndValidation(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	dueDate := "2026-04-16"
+
+	defaulted, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Default metadata",
+		DueDate:    &dueDate,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(defaulted): %v", err)
+	}
+	if defaulted.Priority != domain.TaskPriorityMedium || defaulted.Status != domain.TaskStatusTodo || len(defaulted.Tags) != 0 {
+		t.Fatalf("default metadata = priority:%q status:%q tags:%v, want medium/todo/[]", defaulted.Priority, defaulted.Status, defaulted.Tags)
+	}
+
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Tagged review",
+		DueDate:    &dueDate,
+		Priority:   domain.TaskPriorityHigh,
+		Status:     domain.TaskStatusInProgress,
+		Tags:       []string{" Planning ", "review"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(metadata): %v", err)
+	}
+	if task.Priority != domain.TaskPriorityHigh || task.Status != domain.TaskStatusInProgress || !slices.Equal(task.Tags, []string{"planning", "review"}) {
+		t.Fatalf("task metadata = priority:%q status:%q tags:%v", task.Priority, task.Status, task.Tags)
+	}
+
+	filtered, err := svc.ListTasks(domain.TaskListParams{
+		PageParams: domain.PageParams{CalendarID: calendar.ID, Limit: 10},
+		Priority:   domain.TaskPriorityHigh,
+		Status:     domain.TaskStatusInProgress,
+		Tags:       []string{"review", "planning"},
+	})
+	if err != nil {
+		t.Fatalf("ListTasks(filtered): %v", err)
+	}
+	if len(filtered.Items) != 1 || filtered.Items[0].ID != task.ID {
+		t.Fatalf("filtered tasks = %#v, want tagged review only", filtered.Items)
+	}
+
+	updated, err := svc.UpdateTask(task.ID, domain.TaskPatch{
+		Priority: domain.SetPatch(domain.TaskPriorityLow),
+		Tags:     domain.SetPatch([]string{"later"}),
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask(metadata): %v", err)
+	}
+	if updated.Priority != domain.TaskPriorityLow || !slices.Equal(updated.Tags, []string{"later"}) {
+		t.Fatalf("updated metadata = priority:%q tags:%v, want low/[later]", updated.Priority, updated.Tags)
+	}
+
+	cleared, err := svc.UpdateTask(task.ID, domain.TaskPatch{Tags: domain.ClearPatch[[]string]()})
+	if err != nil {
+		t.Fatalf("UpdateTask(clear tags): %v", err)
+	}
+	if len(cleared.Tags) != 0 {
+		t.Fatalf("cleared tags = %v, want []", cleared.Tags)
+	}
+
+	invalidUpdates := []struct {
+		name  string
+		patch domain.TaskPatch
+	}{
+		{
+			name:  "empty priority",
+			patch: domain.TaskPatch{Priority: domain.SetPatch(domain.TaskPriority(""))},
+		},
+		{
+			name:  "empty status",
+			patch: domain.TaskPatch{Status: domain.SetPatch(domain.TaskStatus(""))},
+		},
+	}
+	for _, test := range invalidUpdates {
+		t.Run("update "+test.name, func(t *testing.T) {
+			_, err := svc.UpdateTask(task.ID, test.patch)
+			if err == nil {
+				t.Fatal("UpdateTask() error = nil, want validation error")
+			}
+			var validationErr *service.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("UpdateTask() error = %T, want ValidationError", err)
+			}
+		})
+	}
+
+	invalidCases := []struct {
+		name string
+		task domain.Task
+	}{
+		{
+			name: "priority",
+			task: domain.Task{CalendarID: calendar.ID, Title: "Bad priority", Priority: domain.TaskPriority("urgent")},
+		},
+		{
+			name: "status",
+			task: domain.Task{CalendarID: calendar.ID, Title: "Bad status", Status: domain.TaskStatus("blocked")},
+		},
+		{
+			name: "tag",
+			task: domain.Task{CalendarID: calendar.ID, Title: "Bad tag", Tags: []string{"needs review"}},
+		},
+	}
+	for _, test := range invalidCases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := svc.CreateTask(test.task)
+			if err == nil {
+				t.Fatal("CreateTask() error = nil, want validation error")
+			}
+			var validationErr *service.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("CreateTask() error = %T, want ValidationError", err)
+			}
+		})
+	}
+}
+
+func TestTaskStatusDoneCompletionInvariants(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	dueDate := "2026-04-16"
+
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Review",
+		DueDate:    &dueDate,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+	completed, err := svc.CompleteTask(task.ID, domain.TaskCompletionRequest{})
+	if err != nil {
+		t.Fatalf("CompleteTask(): %v", err)
+	}
+	if completed.CompletedAt.IsZero() {
+		t.Fatal("completion completed_at is zero")
+	}
+	stored, err := svc.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask(): %v", err)
+	}
+	if stored.Status != domain.TaskStatusDone || stored.CompletedAt == nil {
+		t.Fatalf("stored task = %#v, want done with completed_at", stored)
+	}
+
+	_, err = svc.UpdateTask(task.ID, domain.TaskPatch{Status: domain.SetPatch(domain.TaskStatusTodo)})
+	if err == nil {
+		t.Fatal("UpdateTask(reopen) error = nil, want validation error")
+	}
+	var validationErr *service.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("UpdateTask(reopen) error = %T, want ValidationError", err)
+	}
+
+	recurring, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Recurring",
+		DueDate:    &dueDate,
+		Recurrence: &domain.RecurrenceRule{Frequency: domain.RecurrenceFrequencyDaily, Count: int32Ptr(2)},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(recurring): %v", err)
+	}
+	_, err = svc.UpdateTask(recurring.ID, domain.TaskPatch{Status: domain.SetPatch(domain.TaskStatusDone)})
+	if err == nil {
+		t.Fatal("UpdateTask(recurring done) error = nil, want validation error")
+	}
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("UpdateTask(recurring done) error = %T, want ValidationError", err)
 	}
 }
 

@@ -99,6 +99,12 @@ fields are set, and `null` clears clearable optional fields. Use `event_id` for
 `update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
 `calendar_name` for `update_calendar`.
 
+Tasks support optional metadata. `priority` is one of `low`, `medium`, or
+`high` and defaults to `medium`. `status` is one of `todo`, `in_progress`, or
+`done` and defaults to `todo`. `tags` is an array of lowercase labels using
+letters, digits, `_`, or `-`; `list_tasks` matches all supplied tags when
+filtering.
+
 Delete actions use `event_id` for `delete_event`, `task_id` for `delete_task`,
 and exactly one of `calendar_id` or `calendar_name` for `delete_calendar`.
 Calendar deletion is empty-calendar-only and never cascades to contained events

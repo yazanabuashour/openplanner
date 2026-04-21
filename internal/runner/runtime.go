@@ -265,7 +265,7 @@ func (runtime *localRuntime) DeleteTask(ctx context.Context, id string) error {
 	return service.DeleteTask(id)
 }
 
-func (runtime *localRuntime) ListTasks(ctx context.Context, params domain.PageParams) (domain.Page[domain.Task], error) {
+func (runtime *localRuntime) ListTasks(ctx context.Context, params domain.TaskListParams) (domain.Page[domain.Task], error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.Page[domain.Task]{}, err
 	}

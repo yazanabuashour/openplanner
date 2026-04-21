@@ -16,7 +16,10 @@ import (
 	"github.com/yazanabuashour/openplanner/internal/store"
 )
 
-var colorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+var (
+	colorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+	tagPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
+)
 
 type Service struct {
 	store *store.Store
@@ -355,8 +358,23 @@ func (service *Service) CreateTask(input domain.Task) (domain.Task, error) {
 		DueAt:       cloneTimePtr(input.DueAt),
 		DueDate:     sanitizeOptionalString(input.DueDate),
 		Recurrence:  cloneRule(input.Recurrence),
+		Priority:    defaultTaskPriority(input.Priority),
+		Status:      defaultTaskStatus(input.Status),
+		Tags:        normalizeTags(input.Tags),
 		CreatedAt:   service.now(),
 		UpdatedAt:   service.now(),
+	}
+	if task.Status == domain.TaskStatusDone {
+		if task.Recurrence != nil {
+			return domain.Task{}, &ValidationError{
+				Message: "task validation failed",
+				FieldErrors: []FieldError{
+					{Field: "status", Message: "recurring tasks must be completed with complete_task and an occurrence selector"},
+				},
+			}
+		}
+		completedAt := service.now()
+		task.CompletedAt = &completedAt
 	}
 
 	if err := validateTask(task); err != nil {
@@ -374,19 +392,39 @@ func (service *Service) CreateTask(input domain.Task) (domain.Task, error) {
 	return task, nil
 }
 
-func (service *Service) ListTasks(params domain.PageParams) (domain.Page[domain.Task], error) {
+func (service *Service) ListTasks(params domain.TaskListParams) (domain.Page[domain.Task], error) {
 	if params.CalendarID != "" {
 		if err := validateResourceID("calendarId", params.CalendarID); err != nil {
 			return domain.Page[domain.Task]{}, err
 		}
 	}
+	if err := validateTaskPriority(params.Priority); err != nil {
+		return domain.Page[domain.Task]{}, &ValidationError{
+			Message:     "task filter validation failed",
+			FieldErrors: []FieldError{*err},
+		}
+	}
+	if err := validateTaskStatus(params.Status); err != nil {
+		return domain.Page[domain.Task]{}, &ValidationError{
+			Message:     "task filter validation failed",
+			FieldErrors: []FieldError{*err},
+		}
+	}
+	tags := normalizeTags(params.Tags)
+	if fieldErrors := validateTags(tags); len(fieldErrors) > 0 {
+		return domain.Page[domain.Task]{}, &ValidationError{
+			Message:     "task filter validation failed",
+			FieldErrors: fieldErrors,
+		}
+	}
+	params.Tags = tags
 
-	tasks, err := service.store.ListTasks(params.CalendarID)
+	tasks, err := service.store.ListTasks(params)
 	if err != nil {
 		return domain.Page[domain.Task]{}, err
 	}
 
-	return paginateByCreatedAt(tasks, params)
+	return paginateByCreatedAt(tasks, params.PageParams)
 }
 
 func (service *Service) GetTask(id string) (domain.Task, error) {
@@ -445,6 +483,65 @@ func (service *Service) UpdateTask(id string, patch domain.TaskPatch) (domain.Ta
 			task.Recurrence = nil
 		} else {
 			task.Recurrence = cloneRule(&patch.Recurrence.Value)
+		}
+	}
+	if patch.Priority.Present {
+		if patch.Priority.Clear {
+			return domain.Task{}, &ValidationError{
+				Message:     "task validation failed",
+				FieldErrors: []FieldError{{Field: "priority", Message: "priority cannot be cleared"}},
+			}
+		}
+		if patch.Priority.Value == "" {
+			return domain.Task{}, &ValidationError{
+				Message:     "task validation failed",
+				FieldErrors: []FieldError{{Field: "priority", Message: "priority must be low, medium, or high"}},
+			}
+		}
+		task.Priority = patch.Priority.Value
+	}
+	if patch.Status.Present {
+		if patch.Status.Clear {
+			return domain.Task{}, &ValidationError{
+				Message:     "task validation failed",
+				FieldErrors: []FieldError{{Field: "status", Message: "status cannot be cleared"}},
+			}
+		}
+		nextStatus := patch.Status.Value
+		if nextStatus == "" {
+			return domain.Task{}, &ValidationError{
+				Message:     "task validation failed",
+				FieldErrors: []FieldError{{Field: "status", Message: "status must be todo, in_progress, or done"}},
+			}
+		}
+		if nextStatus == domain.TaskStatusDone {
+			if task.Recurrence != nil {
+				return domain.Task{}, &ValidationError{
+					Message: "task validation failed",
+					FieldErrors: []FieldError{
+						{Field: "status", Message: "recurring tasks must be completed with complete_task and an occurrence selector"},
+					},
+				}
+			}
+			if task.CompletedAt == nil {
+				completedAt := service.now()
+				task.CompletedAt = &completedAt
+			}
+		} else if task.CompletedAt != nil {
+			return domain.Task{}, &ValidationError{
+				Message: "task validation failed",
+				FieldErrors: []FieldError{
+					{Field: "status", Message: "completed tasks cannot be reopened by status update"},
+				},
+			}
+		}
+		task.Status = nextStatus
+	}
+	if patch.Tags.Present {
+		if patch.Tags.Clear {
+			task.Tags = []string{}
+		} else {
+			task.Tags = normalizeTags(patch.Tags.Value)
 		}
 	}
 	task.UpdatedAt = service.now()
@@ -597,7 +694,7 @@ func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[doma
 	if err != nil {
 		return domain.Page[domain.AgendaItem]{}, err
 	}
-	tasks, err := service.store.ListTasks("")
+	tasks, err := service.store.ListTasks(domain.TaskListParams{})
 	if err != nil {
 		return domain.Page[domain.AgendaItem]{}, err
 	}
@@ -680,6 +777,19 @@ func validateTask(task domain.Task) error {
 	if task.Title == "" {
 		fieldErrors = append(fieldErrors, FieldError{Field: "title", Message: "title is required"})
 	}
+	if err := validateTaskPriority(task.Priority); err != nil {
+		fieldErrors = append(fieldErrors, *err)
+	}
+	if err := validateTaskStatus(task.Status); err != nil {
+		fieldErrors = append(fieldErrors, *err)
+	}
+	fieldErrors = append(fieldErrors, validateTags(task.Tags)...)
+	if task.Status == domain.TaskStatusDone && task.Recurrence != nil {
+		fieldErrors = append(fieldErrors, FieldError{Field: "status", Message: "recurring tasks must be completed with complete_task and an occurrence selector"})
+	}
+	if task.Status == domain.TaskStatusDone && task.CompletedAt == nil {
+		fieldErrors = append(fieldErrors, FieldError{Field: "completedAt", Message: "done tasks require completedAt"})
+	}
 	if task.DueAt != nil && task.DueDate != nil {
 		fieldErrors = append(fieldErrors, FieldError{Field: "due", Message: "use either dueAt or dueDate, not both"})
 	}
@@ -701,6 +811,66 @@ func validateTask(task domain.Task) error {
 	}
 
 	return nil
+}
+
+func defaultTaskPriority(priority domain.TaskPriority) domain.TaskPriority {
+	if priority == "" {
+		return domain.TaskPriorityMedium
+	}
+	return priority
+}
+
+func defaultTaskStatus(status domain.TaskStatus) domain.TaskStatus {
+	if status == "" {
+		return domain.TaskStatusTodo
+	}
+	return status
+}
+
+func validateTaskPriority(priority domain.TaskPriority) *FieldError {
+	switch priority {
+	case "", domain.TaskPriorityLow, domain.TaskPriorityMedium, domain.TaskPriorityHigh:
+		return nil
+	default:
+		return &FieldError{Field: "priority", Message: "priority must be low, medium, or high"}
+	}
+}
+
+func validateTaskStatus(status domain.TaskStatus) *FieldError {
+	switch status {
+	case "", domain.TaskStatusTodo, domain.TaskStatusInProgress, domain.TaskStatusDone:
+		return nil
+	default:
+		return &FieldError{Field: "status", Message: "status must be todo, in_progress, or done"}
+	}
+}
+
+func normalizeTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	normalized := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		normalized = append(normalized, strings.ToLower(strings.TrimSpace(tag)))
+	}
+	return normalized
+}
+
+func validateTags(tags []string) []FieldError {
+	fieldErrors := []FieldError{}
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		switch {
+		case tag == "":
+			fieldErrors = append(fieldErrors, FieldError{Field: "tags", Message: "tags cannot contain empty values"})
+		case !tagPattern.MatchString(tag):
+			fieldErrors = append(fieldErrors, FieldError{Field: "tags", Message: "tags must contain only lowercase letters, digits, underscores, or hyphens"})
+		case seen[tag]:
+			fieldErrors = append(fieldErrors, FieldError{Field: "tags", Message: "tags cannot contain duplicates"})
+		}
+		seen[tag] = true
+	}
+	return fieldErrors
 }
 
 func validateRecurrence(rule *domain.RecurrenceRule, timed bool) []FieldError {
@@ -967,6 +1137,9 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 				Title:         task.Title,
 				Description:   cloneStringPtr(task.Description),
 				DueAt:         cloneTimePtr(&occurrence),
+				Priority:      task.Priority,
+				Status:        task.Status,
+				Tags:          slices.Clone(task.Tags),
 			}
 			if task.Recurrence == nil {
 				item.CompletedAt = cloneTimePtr(task.CompletedAt)
@@ -997,6 +1170,9 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 				Title:         task.Title,
 				Description:   cloneStringPtr(task.Description),
 				DueDate:       &occurrence,
+				Priority:      task.Priority,
+				Status:        task.Status,
+				Tags:          slices.Clone(task.Tags),
 			}
 			if task.Recurrence == nil {
 				item.CompletedAt = cloneTimePtr(task.CompletedAt)

@@ -88,6 +88,23 @@ var migrations = []migration{
 			);
 		`,
 	},
+	{
+		version: 2,
+		name:    "task metadata",
+		sql: `
+			ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium';
+			ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'todo';
+			ALTER TABLE tasks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]';
+
+			UPDATE tasks
+			SET status = 'done'
+			WHERE completed_at IS NOT NULL;
+
+			CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status, created_at DESC, id DESC);
+			CREATE INDEX IF NOT EXISTS tasks_priority_idx ON tasks(priority, created_at DESC, id DESC);
+			CREATE INDEX IF NOT EXISTS tasks_calendar_status_priority_idx ON tasks(calendar_id, status, priority, created_at DESC, id DESC);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -312,15 +329,19 @@ func (store *Store) CreateTask(task domain.Task) error {
 	if err != nil {
 		return err
 	}
+	tagsJSON, err := marshalTags(task.Tags)
+	if err != nil {
+		return err
+	}
 
 	_, err = store.db.Exec(`
 		INSERT INTO tasks (
 			id, calendar_id, title, description, due_at, due_date,
-			recurrence_json, completed_at, created_at, updated_at
+			recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, task.ID, task.CalendarID, task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
-		recurrence, nullableTime(task.CompletedAt), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+		recurrence, task.Priority, task.Status, tagsJSON, nullableTime(task.CompletedAt), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
 	}
@@ -328,16 +349,28 @@ func (store *Store) CreateTask(task domain.Task) error {
 	return nil
 }
 
-func (store *Store) ListTasks(calendarID string) ([]domain.Task, error) {
+func (store *Store) ListTasks(params domain.TaskListParams) ([]domain.Task, error) {
 	query := `
 		SELECT id, calendar_id, title, description, due_at, due_date,
-		       recurrence_json, completed_at, created_at, updated_at
+		       recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		FROM tasks
 	`
 	args := []any{}
-	if calendarID != "" {
-		query += ` WHERE calendar_id = ?`
-		args = append(args, calendarID)
+	where := []string{}
+	if params.CalendarID != "" {
+		where = append(where, `calendar_id = ?`)
+		args = append(args, params.CalendarID)
+	}
+	if params.Priority != "" {
+		where = append(where, `priority = ?`)
+		args = append(args, params.Priority)
+	}
+	if params.Status != "" {
+		where = append(where, `status = ?`)
+		args = append(args, params.Status)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY created_at DESC, id DESC`
 
@@ -349,13 +382,27 @@ func (store *Store) ListTasks(calendarID string) ([]domain.Task, error) {
 		_ = rows.Close()
 	}()
 
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(params.Tags) == 0 {
+		return tasks, nil
+	}
+
+	filtered := make([]domain.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if taskHasAllTags(task, params.Tags) {
+			filtered = append(filtered, task)
+		}
+	}
+	return filtered, nil
 }
 
 func (store *Store) GetTask(id string) (domain.Task, error) {
 	row := store.db.QueryRow(`
 		SELECT id, calendar_id, title, description, due_at, due_date,
-		       recurrence_json, completed_at, created_at, updated_at
+		       recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		FROM tasks
 		WHERE id = ?
 	`, id)
@@ -377,14 +424,18 @@ func (store *Store) UpdateTask(task domain.Task) error {
 	if err != nil {
 		return err
 	}
+	tagsJSON, err := marshalTags(task.Tags)
+	if err != nil {
+		return err
+	}
 
 	result, err := store.db.Exec(`
 		UPDATE tasks
 		SET title = ?, description = ?, due_at = ?, due_date = ?,
-		    recurrence_json = ?, completed_at = ?, updated_at = ?
+		    recurrence_json = ?, priority = ?, status = ?, tags_json = ?, completed_at = ?, updated_at = ?
 		WHERE id = ?
 	`, task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
-		recurrence, nullableTime(task.CompletedAt), formatTime(task.UpdatedAt), task.ID)
+		recurrence, task.Priority, task.Status, tagsJSON, nullableTime(task.CompletedAt), formatTime(task.UpdatedAt), task.ID)
 	if err != nil {
 		return mapWriteError(err)
 	}
@@ -411,7 +462,7 @@ func (store *Store) DeleteTask(id string) error {
 func (store *Store) MarkTaskCompleted(taskID string, completedAt time.Time) error {
 	result, err := store.db.Exec(`
 		UPDATE tasks
-		SET completed_at = ?, updated_at = ?
+		SET completed_at = ?, status = 'done', updated_at = ?
 		WHERE id = ? AND completed_at IS NULL
 	`, formatTime(completedAt), formatTime(completedAt), taskID)
 	if err != nil {
@@ -694,13 +745,14 @@ func scanTask(scanner interface {
 		dueAt          sql.NullString
 		dueDate        sql.NullString
 		recurrenceJSON sql.NullString
+		tagsJSON       string
 		completedAt    sql.NullString
 		createdAt      string
 		updatedAt      string
 	)
 	if err := scanner.Scan(
 		&task.ID, &task.CalendarID, &task.Title, &description, &dueAt, &dueDate,
-		&recurrenceJSON, &completedAt, &createdAt, &updatedAt,
+		&recurrenceJSON, &task.Priority, &task.Status, &tagsJSON, &completedAt, &createdAt, &updatedAt,
 	); err != nil {
 		return domain.Task{}, err
 	}
@@ -709,15 +761,61 @@ func scanTask(scanner interface {
 	if err != nil {
 		return domain.Task{}, err
 	}
+	tags, err := parseTags(tagsJSON)
+	if err != nil {
+		return domain.Task{}, err
+	}
 	task.Description = parseNullableString(description)
 	task.DueAt = parseNullableTime(dueAt)
 	task.DueDate = parseNullableString(dueDate)
 	task.Recurrence = recurrence
+	task.Tags = tags
 	task.CompletedAt = parseNullableTime(completedAt)
 	task.CreatedAt = parseStoredTime(createdAt)
 	task.UpdatedAt = parseStoredTime(updatedAt)
 
 	return task, nil
+}
+
+func marshalTags(tags []string) (string, error) {
+	if tags == nil {
+		tags = []string{}
+	}
+	payload, err := json.Marshal(tags)
+	if err != nil {
+		return "", fmt.Errorf("marshal task tags: %w", err)
+	}
+	return string(payload), nil
+}
+
+func parseTags(value string) ([]string, error) {
+	if value == "" {
+		return []string{}, nil
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(value), &tags); err != nil {
+		return nil, fmt.Errorf("parse task tags: %w", err)
+	}
+	if tags == nil {
+		return []string{}, nil
+	}
+	return tags, nil
+}
+
+func taskHasAllTags(task domain.Task, tags []string) bool {
+	if len(tags) == 0 {
+		return true
+	}
+	taskTags := map[string]bool{}
+	for _, tag := range task.Tags {
+		taskTags[tag] = true
+	}
+	for _, tag := range tags {
+		if !taskTags[tag] {
+			return false
+		}
+	}
+	return true
 }
 
 func marshalRecurrence(rule *domain.RecurrenceRule) (sql.NullString, error) {

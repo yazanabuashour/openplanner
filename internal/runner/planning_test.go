@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -365,6 +366,127 @@ func TestRunPlanningTaskUpdateActionsAndClearSemantics(t *testing.T) {
 	}
 	if updatedTask.Rejected || updatedTask.Tasks[0].DueDate != "" || updatedTask.Tasks[0].DueAt != "2026-04-16T11:00:00Z" || updatedTask.Tasks[0].Recurrence != nil {
 		t.Fatalf("updated task = %#v, want due_date and recurrence cleared", updatedTask)
+	}
+}
+
+func TestRunPlanningTaskTaskMetadataRoundTripAndFilters(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Review",
+		DueDate:      "2026-04-16",
+		Priority:     "high",
+		Status:       "in_progress",
+		Tags:         []string{" Planning ", "review"},
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if task.Rejected || len(task.Tasks) != 1 {
+		t.Fatalf("task result = %#v", task)
+	}
+	if task.Tasks[0].Priority != "high" || task.Tasks[0].Status != "in_progress" || !slices.Equal(task.Tasks[0].Tags, []string{"planning", "review"}) {
+		t.Fatalf("created task metadata = %#v", task.Tasks[0])
+	}
+
+	if _, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Backlog",
+		DueDate:      "2026-04-16",
+		Priority:     "low",
+		Status:       "todo",
+		Tags:         []string{"backlog"},
+	}); err != nil {
+		t.Fatalf("create backlog: %v", err)
+	}
+
+	limit := 10
+	filtered, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionListTasks,
+		CalendarName: "Work",
+		Priority:     "high",
+		Status:       "in_progress",
+		Tags:         []string{"review", "planning"},
+		Limit:        &limit,
+	})
+	if err != nil {
+		t.Fatalf("list filtered: %v", err)
+	}
+	if filtered.Rejected || len(filtered.Tasks) != 1 || filtered.Tasks[0].Title != "Review" {
+		t.Fatalf("filtered tasks = %#v, want Review only", filtered)
+	}
+
+	taskUpdateJSON := `{"action":"update_task","task_id":"` + task.Tasks[0].ID + `","priority":"medium","tags":null}`
+	taskUpdate, err := DecodePlanningTaskRequest(bytes.NewBufferString(taskUpdateJSON))
+	if err != nil {
+		t.Fatalf("decode task update: %v", err)
+	}
+	updated, err := RunPlanningTask(ctx, options, taskUpdate)
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+	if updated.Rejected || updated.Tasks[0].Priority != "medium" || len(updated.Tasks[0].Tags) != 0 {
+		t.Fatalf("updated task = %#v, want priority medium and tags cleared", updated)
+	}
+}
+
+func TestRunPlanningTaskTaskMetadataRejectionsBeforeDatabaseCreation(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "invalid priority",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","priority":"urgent"}`,
+		},
+		{
+			name:    "invalid status",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","status":"blocked"}`,
+		},
+		{
+			name:    "invalid tag",
+			request: `{"action":"create_task","calendar_name":"Work","title":"Review","due_date":"2026-04-16","tags":["needs review"]}`,
+		},
+		{
+			name:    "clear priority",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","priority":null}`,
+		},
+		{
+			name:    "empty priority update",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","priority":""}`,
+		},
+		{
+			name:    "empty status update",
+			request: `{"action":"update_task","task_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","status":""}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := DecodePlanningTaskRequest(bytes.NewBufferString(test.request))
+			if err != nil {
+				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
+			}
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask(): %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+				t.Fatalf("database directory exists after validation rejection: %v", err)
+			}
+		})
 	}
 }
 

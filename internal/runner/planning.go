@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,7 +35,10 @@ const (
 	PlanningTaskActionValidate       = "validate"
 )
 
-var colorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+var (
+	colorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+	tagPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
+)
 
 type PlanningTaskRequest struct {
 	Action         string                 `json:"action"`
@@ -53,6 +57,9 @@ type PlanningTaskRequest struct {
 	DueAt          string                 `json:"due_at,omitempty"`
 	DueDate        string                 `json:"due_date,omitempty"`
 	Recurrence     *RecurrenceRuleRequest `json:"recurrence,omitempty"`
+	Priority       string                 `json:"priority,omitempty"`
+	Status         string                 `json:"status,omitempty"`
+	Tags           []string               `json:"tags,omitempty"`
 	TaskID         string                 `json:"task_id,omitempty"`
 	OccurrenceAt   string                 `json:"occurrence_at,omitempty"`
 	OccurrenceDate string                 `json:"occurrence_date,omitempty"`
@@ -124,23 +131,29 @@ type TaskEntry struct {
 	DueAt       string                `json:"due_at,omitempty"`
 	DueDate     string                `json:"due_date,omitempty"`
 	Recurrence  *RecurrenceRuleResult `json:"recurrence,omitempty"`
+	Priority    string                `json:"priority"`
+	Status      string                `json:"status"`
+	Tags        []string              `json:"tags"`
 	CompletedAt string                `json:"completed_at,omitempty"`
 }
 
 type AgendaEntry struct {
-	Kind          string  `json:"kind"`
-	OccurrenceKey string  `json:"occurrence_key"`
-	CalendarID    string  `json:"calendar_id"`
-	SourceID      string  `json:"source_id"`
-	Title         string  `json:"title"`
-	Description   *string `json:"description,omitempty"`
-	StartAt       string  `json:"start_at,omitempty"`
-	EndAt         string  `json:"end_at,omitempty"`
-	StartDate     string  `json:"start_date,omitempty"`
-	EndDate       string  `json:"end_date,omitempty"`
-	DueAt         string  `json:"due_at,omitempty"`
-	DueDate       string  `json:"due_date,omitempty"`
-	CompletedAt   string  `json:"completed_at,omitempty"`
+	Kind          string   `json:"kind"`
+	OccurrenceKey string   `json:"occurrence_key"`
+	CalendarID    string   `json:"calendar_id"`
+	SourceID      string   `json:"source_id"`
+	Title         string   `json:"title"`
+	Description   *string  `json:"description,omitempty"`
+	StartAt       string   `json:"start_at,omitempty"`
+	EndAt         string   `json:"end_at,omitempty"`
+	StartDate     string   `json:"start_date,omitempty"`
+	EndDate       string   `json:"end_date,omitempty"`
+	DueAt         string   `json:"due_at,omitempty"`
+	DueDate       string   `json:"due_date,omitempty"`
+	Priority      string   `json:"priority,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	CompletedAt   string   `json:"completed_at,omitempty"`
 }
 
 type RecurrenceRuleResult struct {
@@ -154,20 +167,21 @@ type RecurrenceRuleResult struct {
 }
 
 type normalizedPlanningTaskRequest struct {
-	Action        string
-	CalendarInput domain.Calendar
-	CalendarPatch domain.CalendarPatch
-	CalendarName  string
-	CalendarID    string
-	EventID       string
-	EventInput    domain.Event
-	EventPatch    domain.EventPatch
-	TaskInput     domain.Task
-	TaskPatch     domain.TaskPatch
-	ListOptions   domain.PageParams
-	AgendaOptions domain.AgendaParams
-	TaskID        string
-	Completion    domain.TaskCompletionRequest
+	Action          string
+	CalendarInput   domain.Calendar
+	CalendarPatch   domain.CalendarPatch
+	CalendarName    string
+	CalendarID      string
+	EventID         string
+	EventInput      domain.Event
+	EventPatch      domain.EventPatch
+	TaskInput       domain.Task
+	TaskPatch       domain.TaskPatch
+	ListOptions     domain.PageParams
+	TaskListOptions domain.TaskListParams
+	AgendaOptions   domain.AgendaParams
+	TaskID          string
+	Completion      domain.TaskCompletionRequest
 }
 
 func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
@@ -229,6 +243,9 @@ var knownPlanningTaskFields = map[string]bool{
 	"due_at":          true,
 	"due_date":        true,
 	"recurrence":      true,
+	"priority":        true,
+	"status":          true,
+	"tags":            true,
 	"task_id":         true,
 	"occurrence_at":   true,
 	"occurrence_date": true,
@@ -257,6 +274,9 @@ func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRe
 	request.TaskPatch.DueAt = jsonTimePatch(raw, "due_at")
 	request.TaskPatch.DueDate = jsonStringPatch(raw, "due_date")
 	request.TaskPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
+	request.TaskPatch.Priority = jsonTaskPriorityPatch(raw, "priority")
+	request.TaskPatch.Status = jsonTaskStatusPatch(raw, "status")
+	request.TaskPatch.Tags = jsonTagsPatch(raw, "tags")
 }
 
 func jsonStringPatch(raw map[string]json.RawMessage, key string) domain.PatchField[string] {
@@ -310,6 +330,51 @@ func jsonRecurrencePatch(raw map[string]json.RawMessage, key string) domain.Patc
 		return domain.PatchField[domain.RecurrenceRule]{}
 	}
 	return domain.SetPatch(*rule)
+}
+
+func jsonTaskPriorityPatch(raw map[string]json.RawMessage, key string) domain.PatchField[domain.TaskPriority] {
+	value, ok := raw[key]
+	if !ok {
+		return domain.PatchField[domain.TaskPriority]{}
+	}
+	if isJSONNull(value) {
+		return domain.ClearPatch[domain.TaskPriority]()
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return domain.PatchField[domain.TaskPriority]{}
+	}
+	return domain.SetPatch(domain.TaskPriority(decoded))
+}
+
+func jsonTaskStatusPatch(raw map[string]json.RawMessage, key string) domain.PatchField[domain.TaskStatus] {
+	value, ok := raw[key]
+	if !ok {
+		return domain.PatchField[domain.TaskStatus]{}
+	}
+	if isJSONNull(value) {
+		return domain.ClearPatch[domain.TaskStatus]()
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return domain.PatchField[domain.TaskStatus]{}
+	}
+	return domain.SetPatch(domain.TaskStatus(decoded))
+}
+
+func jsonTagsPatch(raw map[string]json.RawMessage, key string) domain.PatchField[[]string] {
+	value, ok := raw[key]
+	if !ok {
+		return domain.PatchField[[]string]{}
+	}
+	if isJSONNull(value) {
+		return domain.ClearPatch[[]string]()
+	}
+	var decoded []string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return domain.PatchField[[]string]{}
+	}
+	return domain.SetPatch(decoded)
 }
 
 func isJSONNull(value json.RawMessage) bool {
@@ -612,7 +677,7 @@ func runListEvents(ctx context.Context, api *localRuntime, request normalizedPla
 }
 
 func runListTasks(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
-	options := request.ListOptions
+	options := request.TaskListOptions
 	if request.CalendarName != "" {
 		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
 		if err != nil {
@@ -691,6 +756,12 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		ListOptions: domain.PageParams{
 			Cursor: strings.TrimSpace(request.Cursor),
 			Limit:  limit,
+		},
+		TaskListOptions: domain.TaskListParams{
+			PageParams: domain.PageParams{
+				Cursor: strings.TrimSpace(request.Cursor),
+				Limit:  limit,
+			},
 		},
 	}
 
@@ -810,8 +881,13 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 			Limit:  limit,
 		}
 		return normalized, ""
-	case PlanningTaskActionListEvents, PlanningTaskActionListTasks:
+	case PlanningTaskActionListEvents:
 		if rejection := normalizeOptionalCalendarFilter(request, &normalized); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		return normalized, ""
+	case PlanningTaskActionListTasks:
+		if rejection := normalizeOptionalTaskFilter(request, &normalized); rejection != "" {
 			return normalizedPlanningTaskRequest{}, rejection
 		}
 		return normalized, ""
@@ -1039,8 +1115,62 @@ func normalizeTaskPatchInput(request PlanningTaskRequest) (domain.TaskPatch, str
 			patch.Recurrence = domain.SetPatch(*recurrence)
 		}
 	}
+	if !patch.Priority.Present && strings.TrimSpace(request.Priority) != "" {
+		priority, rejection := normalizeTaskPriority(request.Priority)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Priority = domain.SetPatch(priority)
+	}
+	if !patch.Status.Present && strings.TrimSpace(request.Status) != "" {
+		status, rejection := normalizeTaskStatus(request.Status)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Status = domain.SetPatch(status)
+	}
+	if !patch.Tags.Present && request.Tags != nil {
+		tags, rejection := normalizeTags(request.Tags)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Tags = domain.SetPatch(tags)
+	}
 	if patch.Title.Clear {
 		return domain.TaskPatch{}, "title cannot be cleared"
+	}
+	if patch.Priority.Clear {
+		return domain.TaskPatch{}, "priority cannot be cleared"
+	}
+	if patch.Status.Clear {
+		return domain.TaskPatch{}, "status cannot be cleared"
+	}
+	if patch.Priority.Present && !patch.Priority.Clear {
+		if strings.TrimSpace(string(patch.Priority.Value)) == "" {
+			return domain.TaskPatch{}, "priority must be low, medium, or high"
+		}
+		priority, rejection := normalizeTaskPriority(string(patch.Priority.Value))
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Priority = domain.SetPatch(priority)
+	}
+	if patch.Status.Present && !patch.Status.Clear {
+		if strings.TrimSpace(string(patch.Status.Value)) == "" {
+			return domain.TaskPatch{}, "status must be todo, in_progress, or done"
+		}
+		status, rejection := normalizeTaskStatus(string(patch.Status.Value))
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Status = domain.SetPatch(status)
+	}
+	if patch.Tags.Present && !patch.Tags.Clear {
+		tags, rejection := normalizeTags(patch.Tags.Value)
+		if rejection != "" {
+			return domain.TaskPatch{}, rejection
+		}
+		patch.Tags = domain.SetPatch(tags)
 	}
 	if !taskPatchHasUpdate(patch) {
 		return domain.TaskPatch{}, "at least one update field is required"
@@ -1063,6 +1193,36 @@ func normalizeOptionalCalendarFilter(request PlanningTaskRequest, normalized *no
 	}
 	if name != "" {
 		normalized.CalendarName = name
+	}
+	return ""
+}
+
+func normalizeOptionalTaskFilter(request PlanningTaskRequest, normalized *normalizedPlanningTaskRequest) string {
+	if rejection := normalizeOptionalCalendarFilter(request, normalized); rejection != "" {
+		return rejection
+	}
+	normalized.TaskListOptions.PageParams = normalized.ListOptions
+	normalized.TaskListOptions.CalendarID = normalized.ListOptions.CalendarID
+	if strings.TrimSpace(request.Priority) != "" {
+		priority, rejection := normalizeTaskPriority(request.Priority)
+		if rejection != "" {
+			return rejection
+		}
+		normalized.TaskListOptions.Priority = priority
+	}
+	if strings.TrimSpace(request.Status) != "" {
+		status, rejection := normalizeTaskStatus(request.Status)
+		if rejection != "" {
+			return rejection
+		}
+		normalized.TaskListOptions.Status = status
+	}
+	if request.Tags != nil {
+		tags, rejection := normalizeTags(request.Tags)
+		if rejection != "" {
+			return rejection
+		}
+		normalized.TaskListOptions.Tags = tags
 	}
 	return ""
 }
@@ -1130,6 +1290,12 @@ func normalizeTaskInput(request PlanningTaskRequest) (domain.Task, string) {
 	if title == "" {
 		return domain.Task{}, "title is required"
 	}
+	if request.TaskPatch.Priority.Clear {
+		return domain.Task{}, "priority cannot be cleared"
+	}
+	if request.TaskPatch.Status.Clear {
+		return domain.Task{}, "status cannot be cleared"
+	}
 	dueAt, rejection := parseOptionalTime("due_at", request.DueAt)
 	if rejection != "" {
 		return domain.Task{}, rejection
@@ -1148,12 +1314,27 @@ func normalizeTaskInput(request PlanningTaskRequest) (domain.Task, string) {
 	if recurrence != nil && dueAt == nil && dueDate == nil {
 		return domain.Task{}, "recurring tasks require due_at or due_date"
 	}
+	priority, rejection := normalizeTaskPriority(request.Priority)
+	if rejection != "" {
+		return domain.Task{}, rejection
+	}
+	status, rejection := normalizeTaskStatus(request.Status)
+	if rejection != "" {
+		return domain.Task{}, rejection
+	}
+	tags, rejection := normalizeTags(request.Tags)
+	if rejection != "" {
+		return domain.Task{}, rejection
+	}
 	return domain.Task{
 		Title:       title,
 		Description: request.Description,
 		DueAt:       dueAt,
 		DueDate:     dueDate,
 		Recurrence:  recurrence,
+		Priority:    priority,
+		Status:      status,
+		Tags:        tags,
 	}, ""
 }
 
@@ -1265,6 +1446,52 @@ func normalizeLimit(limit *int) (int, string) {
 	return *limit, ""
 }
 
+func normalizeTaskPriority(value string) (domain.TaskPriority, string) {
+	value = strings.TrimSpace(value)
+	switch domain.TaskPriority(value) {
+	case "":
+		return "", ""
+	case domain.TaskPriorityLow, domain.TaskPriorityMedium, domain.TaskPriorityHigh:
+		return domain.TaskPriority(value), ""
+	default:
+		return "", "priority must be low, medium, or high"
+	}
+}
+
+func normalizeTaskStatus(value string) (domain.TaskStatus, string) {
+	value = strings.TrimSpace(value)
+	switch domain.TaskStatus(value) {
+	case "":
+		return "", ""
+	case domain.TaskStatusTodo, domain.TaskStatusInProgress, domain.TaskStatusDone:
+		return domain.TaskStatus(value), ""
+	default:
+		return "", "status must be todo, in_progress, or done"
+	}
+}
+
+func normalizeTags(values []string) ([]string, string) {
+	if values == nil {
+		return []string{}, ""
+	}
+	tags := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, raw := range values {
+		tag := strings.ToLower(strings.TrimSpace(raw))
+		switch {
+		case tag == "":
+			return nil, "tags cannot contain empty values"
+		case !tagPattern.MatchString(tag):
+			return nil, "tags must contain only lowercase letters, digits, underscores, or hyphens"
+		case seen[tag]:
+			return nil, "tags cannot contain duplicates"
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags, ""
+}
+
 func calendarName(request PlanningTaskRequest) string {
 	if name := strings.TrimSpace(request.CalendarName); name != "" {
 		return name
@@ -1338,7 +1565,10 @@ func taskPatchHasUpdate(patch domain.TaskPatch) bool {
 		patch.Description.Present ||
 		patch.DueAt.Present ||
 		patch.DueDate.Present ||
-		patch.Recurrence.Present
+		patch.Recurrence.Present ||
+		patch.Priority.Present ||
+		patch.Status.Present ||
+		patch.Tags.Present
 }
 
 func parseRequiredTime(field string, value string) (time.Time, string) {
@@ -1467,6 +1697,9 @@ func taskEntry(task domain.Task) TaskEntry {
 		Description: cloneString(task.Description),
 		DueDate:     stringValue(task.DueDate),
 		Recurrence:  recurrenceResult(task.Recurrence),
+		Priority:    string(task.Priority),
+		Status:      string(task.Status),
+		Tags:        slices.Clone(task.Tags),
 	}
 	if task.DueAt != nil {
 		out.DueAt = formatJSONTime(*task.DueAt)
@@ -1490,6 +1723,9 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 			StartDate:     stringValue(item.StartDate),
 			EndDate:       stringValue(item.EndDate),
 			DueDate:       stringValue(item.DueDate),
+			Priority:      string(item.Priority),
+			Status:        string(item.Status),
+			Tags:          slices.Clone(item.Tags),
 		}
 		if item.StartAt != nil {
 			entry.StartAt = formatJSONTime(*item.StartAt)

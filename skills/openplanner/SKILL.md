@@ -58,9 +58,13 @@ and task titles can be changed but cannot be cleared.
 
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
-user explicitly asks for one. Import/export, reminders, and task
-priority/status/tags are not supported until the installed JSON runner ships
-those actions or fields.
+user explicitly asks for one. Import/export and reminders are not supported
+until the installed JSON runner ships those actions or fields.
+
+Tasks support metadata. Use `priority` values `low`, `medium`, or `high`;
+`status` values `todo`, `in_progress`, or `done`; and `tags` as lowercase labels
+containing only letters, digits, `_`, or `-`. Invalid task metadata values should
+be rejected directly before tools.
 
 ## Reject Before Tools
 
@@ -77,6 +81,9 @@ any CLI when the request has:
 | invalid agenda range where `from` is after `to` | reject the range |
 | unsupported recurrence, like hourly | support only daily, weekly, monthly |
 | non-positive limit | require a positive limit |
+| invalid task priority | require `low`, `medium`, or `high` |
+| invalid task status | require `todo`, `in_progress`, or `done` |
+| invalid task tags with spaces or punctuation | require lowercase letters, digits, `_`, or `-` |
 
 Never convert a year-first slash date to dashed ISO form; reject it. Never
 convert an invalid RFC3339 time like `2026-04-16 09:00` to
@@ -119,9 +126,11 @@ Tasks:
 ```json
 {"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16"}
 {"action":"create_task","calendar_name":"Work","title":"Send summary","due_at":"2026-04-16T11:00:00Z"}
+{"action":"create_task","calendar_name":"Personal","title":"Review notes","due_date":"2026-04-16","priority":"high","status":"in_progress","tags":["planning","review"]}
 {"action":"create_task","calendar_name":"Personal","title":"Daily review","due_date":"2026-04-16","recurrence":{"frequency":"daily","count":3}}
 {"action":"create_task","calendar_name":"Personal","title":"Pay rent","due_date":"2026-01-31","recurrence":{"frequency":"monthly","by_month_day":[31],"count":3}}
 {"action":"update_task","task_id":"<id-from-prior-runner-result>","due_date":null,"due_at":"2026-04-16T11:00:00Z","recurrence":null}
+{"action":"update_task","task_id":"<id-from-prior-runner-result>","priority":"medium","tags":null}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
 {"action":"delete_task","task_id":"<id-from-prior-runner-result>"}
@@ -133,6 +142,7 @@ Lists:
 {"action":"list_agenda","from":"2026-04-16T00:00:00Z","to":"2026-04-17T00:00:00Z","limit":100}
 {"action":"list_events","calendar_name":"Work","limit":1}
 {"action":"list_tasks","calendar_name":"Personal","limit":1}
+{"action":"list_tasks","calendar_name":"Work","priority":"high","status":"in_progress","tags":["planning","review"],"limit":10}
 ```
 
 Deletes:

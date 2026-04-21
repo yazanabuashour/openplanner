@@ -23,6 +23,7 @@ The baseline production gate covers routine local planning tasks:
 - recurring event creation
 - bounded agenda listing with chronological output
 - event and task listing with limits and calendar filters
+- task priority, status, and tag creation plus filtered task queries
 - task completion for non-recurring and recurring occurrences
 - event, task, and empty-calendar deletion through runner delete actions
 - mixed event and task requests in one user task
@@ -40,8 +41,8 @@ The expanded production gate adds:
 - migration-style workflows that recreate selected source calendar data through
   runner actions
 - multi-turn disambiguation that requires a clarification before writing
-- future-surface unsupported gates for import/export, reminders, and task
-  metadata until those JSON runner features land
+- future-surface unsupported gates for import/export and reminders until those
+  JSON runner features land
 
 Unsupported gates become positive gates when their corresponding runner actions
 or fields are implemented. The production skill remains the only model-visible

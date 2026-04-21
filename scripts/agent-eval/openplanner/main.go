@@ -238,6 +238,9 @@ type taskState struct {
 	DueDateCleared    bool     `json:"due_date_cleared,omitempty"`
 	Recurrence        string   `json:"recurrence,omitempty"`
 	RecurrenceCleared bool     `json:"recurrence_cleared,omitempty"`
+	Priority          string   `json:"priority,omitempty"`
+	Status            string   `json:"status,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
 	Interval          int32    `json:"interval,omitempty"`
 	Count             *int32   `json:"count,omitempty"`
 	UntilAt           string   `json:"until_at,omitempty"`
@@ -1608,6 +1611,7 @@ func scenarios() []scenario {
 		{ID: "agenda-range", Title: "List a bounded agenda range chronologically", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Show my agenda from 2026-04-16T00:00:00Z to 2026-04-17T00:00:00Z. Mention only items in that range, chronologically."},
 		{ID: "list-events-filter-limit", Title: "List events with calendar filter and limit", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List only the first Work calendar event. Do not mention Personal calendar events."},
 		{ID: "list-tasks-filter-limit", Title: "List tasks with calendar filter and limit", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List only the first Personal calendar task. Do not mention Work calendar tasks."},
+		{ID: "list-tasks-metadata-filter", Title: "List tasks with priority, status, and tag filters", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. List Work tasks with high priority, status in_progress, and tags planning and review. Mention only matching tasks."},
 		{ID: "complete-task", Title: "Complete a non-recurring task", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the Personal task titled Review notes due on 2026-04-16. Tell me what was completed."},
 		{ID: "complete-recurring-task", Title: "Complete a recurring task occurrence", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Complete the 2026-04-17 occurrence of the Personal recurring task titled Daily review. Tell me what occurrence was completed."},
 		{ID: "delete-task", Title: "Delete a task by listed ID", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Delete the Personal task titled Old note. Leave the Personal task titled Keep note in place. Tell me what was deleted."},
@@ -1621,15 +1625,18 @@ func scenarios() []scenario {
 		{ID: "invalid-range", Title: "Reject an invalid agenda range without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please show my OpenPlanner agenda from 2026-04-18T00:00:00Z to 2026-04-16T00:00:00Z."},
 		{ID: "unsupported-recurrence", Title: "Reject unsupported recurrence without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 recurring hourly."},
 		{ID: "non-positive-limit", Title: "Reject a non-positive list limit without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please list 0 OpenPlanner tasks."},
+		{ID: "invalid-task-priority", Title: "Reject an invalid task priority without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 with urgent priority. If urgent is not a valid priority, reject this request directly without running tools."},
+		{ID: "invalid-task-status", Title: "Reject an invalid task status without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 with blocked status. If blocked is not a valid status, reject this request directly without running tools."},
+		{ID: "invalid-task-tag", Title: "Reject an invalid task tag without writing", Category: scenarioCategoryValidation, FeatureState: scenarioFeatureSupported, Prompt: "Please add a local OpenPlanner task titled Review notes due on 2026-04-16 with tag \"needs review\". If spaces are not valid inside tags, reject this request directly without running tools."},
 		{ID: "update-calendar-metadata", Title: "Update calendar metadata", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Ensure a Work calendar exists, set its description to Delivery planning and its color to #2563EB, then tell me what calendar metadata is stored."},
 		{ID: "update-event-patch-clear", Title: "Clear optional event fields with patch semantics", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Find the Work event titled Planning sync, clear its location and recurrence, preserve its title and time, then tell me what changed."},
 		{ID: "update-task-due-mode", Title: "Convert a dated task to a timed task", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Find the Personal task titled Review notes and change it from due on 2026-04-16 to due at 2026-04-16T11:00:00Z, clearing the date-only due date. Then tell me what task is stored."},
 		{ID: "weekly-recurrence-by-weekday", Title: "Create weekly recurrence by weekday", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Water plants due on 2026-04-13 recurring weekly on Monday and Wednesday for 4 occurrences. Then tell me the recurrence stored."},
 		{ID: "monthly-recurrence-by-month-day", Title: "Create monthly recurrence by month day", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Pay rent due on 2026-01-31 recurring monthly on the 31st for 3 occurrences. Then tell me the recurrence stored."},
+		{ID: "task-metadata-create", Title: "Create task priority, status, and tags", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. Then tell me the stored priority, status, and tags."},
 		{ID: "migration-style-copy", Title: "Copy selected source calendar data into a destination calendar", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Copy the Legacy calendar items titled Team sync and Review notes into the Work calendar, leaving the Legacy items in place. Then tell me what was copied."},
 		{ID: "unsupported-import-export", Title: "Reject import/export before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please export my local OpenPlanner calendar to an iCalendar .ics file and import an iCalendar file into OpenPlanner. If the production OpenPlanner skill does not support import or export yet, say that directly without switching interfaces."},
 		{ID: "unsupported-reminder", Title: "Reject reminders before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Take medicine due on 2026-04-16 with a reminder one hour before. If reminders are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
-		{ID: "unsupported-task-metadata", Title: "Reject task metadata before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. If priority, status, or tags are not supported by the production OpenPlanner skill yet, say that directly without writing anything."},
 		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
 			{Prompt: "Please add a local OpenPlanner Personal task titled Review notes due 04/16. There is no year context in this conversation or my request."},
 			{Prompt: "Use 2026 as the year for that Personal task."},
@@ -1718,6 +1725,8 @@ func seedScenario(dbPath string, sc scenario) error {
 		return seedEventFilter(dbPath)
 	case "list-tasks-filter-limit", "complete-task", "mt-list-then-complete":
 		return seedReviewTask(dbPath)
+	case "list-tasks-metadata-filter":
+		return seedTaskMetadataFilter(dbPath)
 	case "complete-recurring-task":
 		return seedRecurringTask(dbPath)
 	case "delete-task":
@@ -1758,6 +1767,14 @@ func seedReviewTask(dbPath string) error {
 	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
 		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Review notes", DueDate: "2026-04-16"},
 		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Work backlog", DueDate: "2026-04-16"},
+	})
+}
+
+func seedTaskMetadataFilter(dbPath string) error {
+	return runSeedRequests(dbPath, []runner.PlanningTaskRequest{
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Metadata review", DueDate: "2026-04-16", Priority: "high", Status: "in_progress", Tags: []string{"planning", "review"}},
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Work", Title: "Low priority backlog", DueDate: "2026-04-16", Priority: "low", Status: "todo", Tags: []string{"planning"}},
+		{Action: runner.PlanningTaskActionCreateTask, CalendarName: "Personal", Title: "Personal review", DueDate: "2026-04-16", Priority: "high", Status: "in_progress", Tags: []string{"planning", "review"}},
 	})
 }
 
@@ -1853,6 +1870,8 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyEvents(dbPath, finalMessage, []eventState{{Title: "Work sync"}}, []string{"Personal appointment"})
 	case "list-tasks-filter-limit":
 		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes"}}, []string{"Work backlog"}, false)
+	case "list-tasks-metadata-filter":
+		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Metadata review", Priority: "high", Status: "in_progress", Tags: []string{"planning", "review"}}}, []string{"Low priority backlog", "Personal review"}, false)
 	case "complete-task":
 		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes"}}, nil, true)
 	case "complete-recurring-task":
@@ -1887,14 +1906,14 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 			return taskCheck, err
 		}
 		return verifyAgendaOccurrences(dbPath, finalMessage, "Pay rent", []string{"2026-01-31", "2026-03-31"}, []string{"2026-02-28"})
+	case "task-metadata-create":
+		return verifyTasks(dbPath, finalMessage, []taskState{{Title: "Review notes", DueDate: "2026-04-16", Priority: "high", Status: "in_progress", Tags: []string{"planning", "review"}}}, nil, false)
 	case "migration-style-copy":
 		return verifyMigrationCopy(dbPath, finalMessage)
 	case "unsupported-import-export":
 		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "export", "icalendar", "ics"})
 	case "unsupported-reminder":
 		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"reminder"})
-	case "unsupported-task-metadata":
-		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"priority", "status", "tags"})
 	case "ambiguous-short-date":
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"year"})
 	case "year-first-slash-date":
@@ -1909,6 +1928,12 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"recurrence", "unsupported", "daily", "weekly", "monthly"})
 	case "non-positive-limit":
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"limit", "positive"})
+	case "invalid-task-priority":
+		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"priority", "low", "medium", "high"})
+	case "invalid-task-status":
+		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"status", "todo", "in_progress", "done"})
+	case "invalid-task-tag":
+		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"tag", "spaces", "invalid"})
 	case "mt-clarify-then-create":
 		if turnIndex == 1 {
 			return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"year"})
@@ -2414,6 +2439,15 @@ func taskMatches(task runner.TaskEntry, want taskState, requireCompleted bool) b
 	if want.RecurrenceCleared && task.Recurrence != nil {
 		return false
 	}
+	if want.Priority != "" && task.Priority != want.Priority {
+		return false
+	}
+	if want.Status != "" && task.Status != want.Status {
+		return false
+	}
+	if len(want.Tags) > 0 && !sameStringSet(task.Tags, want.Tags) {
+		return false
+	}
 	if !recurrenceMatches(task.Recurrence, want.Recurrence, want.Interval, want.Count, want.UntilAt, want.UntilDate, want.ByWeekday, want.ByMonthDay) {
 		return false
 	}
@@ -2518,6 +2552,13 @@ func taskMentionValues(expected []taskState) []string {
 		if task.DueDate != "" {
 			values = append(values, task.DueDate)
 		}
+		if task.Priority != "" {
+			values = append(values, task.Priority)
+		}
+		if task.Status != "" {
+			values = append(values, task.Status)
+		}
+		values = append(values, task.Tags...)
 	}
 	return values
 }
@@ -3539,10 +3580,14 @@ func promptSummary(sc scenario) string {
 		return "list one Work event"
 	case "list-tasks-filter-limit":
 		return "list one Personal task"
+	case "list-tasks-metadata-filter":
+		return "list task metadata filter"
 	case "complete-task":
 		return "complete seeded non-recurring task"
 	case "complete-recurring-task":
 		return "complete seeded recurring occurrence"
+	case "task-metadata-create":
+		return "create task metadata"
 	case "mixed-event-task":
 		return "create an event and task"
 	case "mt-clarify-then-create":
