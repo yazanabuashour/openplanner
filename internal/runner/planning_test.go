@@ -169,6 +169,99 @@ func TestRunPlanningTaskAllDayEventAndListFiltering(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskEventAttendeesRoundTripListAgendaAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	create, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T10:00:00Z","attendees":[{"email":" alex@example.com ","display_name":" Alex Rivera ","role":"required","participation_status":"accepted","rsvp":true},{"email":"sam@example.com"}]}`))
+	if err != nil {
+		t.Fatalf("decode create event: %v", err)
+	}
+	event, err := RunPlanningTask(ctx, options, create)
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if event.Rejected || len(event.Events) != 1 || len(event.Events[0].Attendees) != 2 {
+		t.Fatalf("event result = %#v, want attendees", event)
+	}
+	if event.Events[0].Attendees[0].Email != "alex@example.com" ||
+		event.Events[0].Attendees[0].DisplayName == nil ||
+		*event.Events[0].Attendees[0].DisplayName != "Alex Rivera" ||
+		event.Events[0].Attendees[0].Role != "required" ||
+		event.Events[0].Attendees[0].ParticipationStatus != "accepted" ||
+		!event.Events[0].Attendees[0].RSVP {
+		t.Fatalf("first attendee = %#v, want normalized accepted attendee", event.Events[0].Attendees[0])
+	}
+	if event.Events[0].Attendees[1].Role != "required" ||
+		event.Events[0].Attendees[1].ParticipationStatus != "needs_action" ||
+		event.Events[0].Attendees[1].RSVP {
+		t.Fatalf("second attendee = %#v, want default attendee metadata", event.Events[0].Attendees[1])
+	}
+
+	limit := 10
+	events, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListEvents, CalendarName: "Work", Limit: &limit})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if events.Rejected || len(events.Events) != 1 || len(events.Events[0].Attendees) != 2 {
+		t.Fatalf("listed events = %#v, want attendees", events)
+	}
+
+	agenda, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListAgenda,
+		From:   "2026-04-16T00:00:00Z",
+		To:     "2026-04-17T00:00:00Z",
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("list agenda: %v", err)
+	}
+	if agenda.Rejected || len(agenda.Agenda) != 1 || len(agenda.Agenda[0].Attendees) != 2 {
+		t.Fatalf("agenda = %#v, want event attendees", agenda)
+	}
+
+	preserve, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"update_event","event_id":"` + event.Events[0].ID + `","title":"Planning updated"}`))
+	if err != nil {
+		t.Fatalf("decode preserve update: %v", err)
+	}
+	preserved, err := RunPlanningTask(ctx, options, preserve)
+	if err != nil {
+		t.Fatalf("update event title: %v", err)
+	}
+	if preserved.Rejected || preserved.Events[0].Title != "Planning updated" || len(preserved.Events[0].Attendees) != 2 {
+		t.Fatalf("preserved event = %#v, want attendees preserved", preserved)
+	}
+
+	replace, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"update_event","event_id":"` + event.Events[0].ID + `","attendees":[{"email":"taylor@example.com","role":"optional","participation_status":"tentative"}]}`))
+	if err != nil {
+		t.Fatalf("decode replace attendees: %v", err)
+	}
+	replaced, err := RunPlanningTask(ctx, options, replace)
+	if err != nil {
+		t.Fatalf("replace attendees: %v", err)
+	}
+	if replaced.Rejected || len(replaced.Events[0].Attendees) != 1 ||
+		replaced.Events[0].Attendees[0].Email != "taylor@example.com" ||
+		replaced.Events[0].Attendees[0].Role != "optional" ||
+		replaced.Events[0].Attendees[0].ParticipationStatus != "tentative" {
+		t.Fatalf("replaced event = %#v, want replacement attendee", replaced)
+	}
+
+	clear, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"update_event","event_id":"` + event.Events[0].ID + `","attendees":null}`))
+	if err != nil {
+		t.Fatalf("decode clear attendees: %v", err)
+	}
+	cleared, err := RunPlanningTask(ctx, options, clear)
+	if err != nil {
+		t.Fatalf("clear attendees: %v", err)
+	}
+	if cleared.Rejected || len(cleared.Events[0].Attendees) != 0 {
+		t.Fatalf("cleared event = %#v, want no attendees", cleared)
+	}
+}
+
 func TestRunPlanningTaskCalendarIDWriteReturnsCalendarDetails(t *testing.T) {
 	t.Parallel()
 
@@ -931,6 +1024,63 @@ func TestRunPlanningTaskReminderRejectionsBeforeDatabaseCreation(t *testing.T) {
 				t.Fatalf("database directory exists after validation rejection: %v", err)
 			}
 		})
+	}
+}
+
+func TestRunPlanningTaskAttendeeRejectionsBeforeDatabaseCreation(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "nested", "openplanner.db")
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "missing email",
+			request: `{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"display_name":"No Email"}]}`,
+		},
+		{
+			name:    "invalid email",
+			request: `{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"email":"alex example.com"}]}`,
+		},
+		{
+			name:    "duplicate email",
+			request: `{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"email":"Alex@example.com"},{"email":"alex@example.com"}]}`,
+		},
+		{
+			name:    "invalid role",
+			request: `{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"email":"alex@example.com","role":"speaker"}]}`,
+		},
+		{
+			name:    "invalid participation status",
+			request: `{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"email":"alex@example.com","participation_status":"maybe"}]}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := DecodePlanningTaskRequest(bytes.NewBufferString(test.request))
+			if err != nil {
+				t.Fatalf("DecodePlanningTaskRequest(): %v", err)
+			}
+			result, err := RunPlanningTask(context.Background(), Options{DatabasePath: databasePath}, request)
+			if err != nil {
+				t.Fatalf("RunPlanningTask(): %v", err)
+			}
+			if !result.Rejected || result.RejectionReason == "" {
+				t.Fatalf("result = %#v, want rejection", result)
+			}
+			if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+				t.Fatalf("database directory exists after validation rejection: %v", err)
+			}
+		})
+	}
+
+	if _, err := DecodePlanningTaskRequest(bytes.NewBufferString(`{"action":"create_event","calendar_name":"Work","title":"Planning","start_date":"2026-04-16","attendees":[{"email":"alex@example.com","unknown":true}]}`)); err == nil {
+		t.Fatal("DecodePlanningTaskRequest() error = nil, want unknown attendee field error")
+	}
+	if _, err := os.Stat(filepath.Dir(databasePath)); !os.IsNotExist(err) {
+		t.Fatalf("database directory exists after decode rejection: %v", err)
 	}
 }
 

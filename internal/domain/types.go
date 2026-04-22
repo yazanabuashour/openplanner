@@ -38,6 +38,25 @@ const (
 	TaskStatusDone       TaskStatus = "done"
 )
 
+type EventAttendeeRole string
+
+const (
+	EventAttendeeRoleRequired       EventAttendeeRole = "required"
+	EventAttendeeRoleOptional       EventAttendeeRole = "optional"
+	EventAttendeeRoleChair          EventAttendeeRole = "chair"
+	EventAttendeeRoleNonParticipant EventAttendeeRole = "non_participant"
+)
+
+type EventParticipationStatus string
+
+const (
+	EventParticipationStatusNeedsAction EventParticipationStatus = "needs_action"
+	EventParticipationStatusAccepted    EventParticipationStatus = "accepted"
+	EventParticipationStatusDeclined    EventParticipationStatus = "declined"
+	EventParticipationStatusTentative   EventParticipationStatus = "tentative"
+	EventParticipationStatusDelegated   EventParticipationStatus = "delegated"
+)
+
 type RecurrenceRule struct {
 	Frequency  RecurrenceFrequency
 	Interval   int32
@@ -89,6 +108,7 @@ type Event struct {
 	EndDate       *string
 	Recurrence    *RecurrenceRule
 	Reminders     []ReminderRule
+	Attendees     []EventAttendee
 	LinkedTaskIDs []string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -104,6 +124,17 @@ type EventPatch struct {
 	EndDate     PatchField[string]
 	Recurrence  PatchField[RecurrenceRule]
 	Reminders   PatchField[[]ReminderRule]
+	Attendees   PatchField[[]EventAttendee]
+}
+
+type EventAttendee struct {
+	Email               string
+	DisplayName         *string
+	Role                EventAttendeeRole
+	ParticipationStatus EventParticipationStatus
+	RSVP                bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type Task struct {
@@ -219,6 +250,7 @@ type AgendaItem struct {
 	Priority       TaskPriority
 	Status         TaskStatus
 	Tags           []string
+	Attendees      []EventAttendee
 	LinkedTaskIDs  []string
 	LinkedEventIDs []string
 	CompletedAt    *time.Time

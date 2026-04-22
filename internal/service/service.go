@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 
@@ -185,6 +186,7 @@ func (service *Service) CreateEvent(input domain.Event) (domain.Event, error) {
 		return domain.Event{}, err
 	}
 
+	now := service.now()
 	event := domain.Event{
 		ID:          ulid.Make().String(),
 		CalendarID:  input.CalendarID,
@@ -196,9 +198,10 @@ func (service *Service) CreateEvent(input domain.Event) (domain.Event, error) {
 		StartDate:   sanitizeOptionalString(input.StartDate),
 		EndDate:     sanitizeOptionalString(input.EndDate),
 		Recurrence:  cloneRule(input.Recurrence),
-		Reminders:   buildReminderRules(input.Reminders, service.now()),
-		CreatedAt:   service.now(),
-		UpdatedAt:   service.now(),
+		Reminders:   buildReminderRules(input.Reminders, now),
+		Attendees:   buildEventAttendees(input.Attendees, now),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := validateEvent(event); err != nil {
@@ -315,6 +318,13 @@ func (service *Service) UpdateEvent(id string, patch domain.EventPatch) (domain.
 			event.Reminders = []domain.ReminderRule{}
 		} else {
 			event.Reminders = buildReminderRules(patch.Reminders.Value, service.now())
+		}
+	}
+	if patch.Attendees.Present {
+		if patch.Attendees.Clear {
+			event.Attendees = []domain.EventAttendee{}
+		} else {
+			event.Attendees = buildEventAttendees(patch.Attendees.Value, service.now())
 		}
 	}
 	event.UpdatedAt = service.now()
@@ -932,6 +942,7 @@ func validateEvent(event domain.Event) error {
 	}
 	fieldErrors = append(fieldErrors, validateRecurrence(event.Recurrence, timed || event.StartAt != nil)...)
 	fieldErrors = append(fieldErrors, validateReminders(event.Reminders)...)
+	fieldErrors = append(fieldErrors, validateEventAttendees(event.Attendees)...)
 
 	if len(fieldErrors) > 0 {
 		return &ValidationError{
@@ -1063,6 +1074,60 @@ func validateReminders(reminders []domain.ReminderRule) []FieldError {
 	return fieldErrors
 }
 
+func validateEventAttendees(attendees []domain.EventAttendee) []FieldError {
+	fieldErrors := []FieldError{}
+	seen := map[string]bool{}
+	for _, attendee := range attendees {
+		email := strings.TrimSpace(attendee.Email)
+		emailKey := strings.ToLower(email)
+		switch {
+		case !validAttendeeEmail(email):
+			fieldErrors = append(fieldErrors, FieldError{Field: "attendees.email", Message: "email must be a valid email address"})
+		case seen[emailKey]:
+			fieldErrors = append(fieldErrors, FieldError{Field: "attendees", Message: "attendees cannot contain duplicate email values"})
+		}
+		seen[emailKey] = true
+		if err := validateEventAttendeeRole(attendee.Role); err != nil {
+			fieldErrors = append(fieldErrors, *err)
+		}
+		if err := validateEventParticipationStatus(attendee.ParticipationStatus); err != nil {
+			fieldErrors = append(fieldErrors, *err)
+		}
+	}
+	return fieldErrors
+}
+
+func validateEventAttendeeRole(role domain.EventAttendeeRole) *FieldError {
+	switch role {
+	case domain.EventAttendeeRoleRequired, domain.EventAttendeeRoleOptional, domain.EventAttendeeRoleChair, domain.EventAttendeeRoleNonParticipant:
+		return nil
+	default:
+		return &FieldError{Field: "attendees.role", Message: "role must be required, optional, chair, or non_participant"}
+	}
+}
+
+func validateEventParticipationStatus(status domain.EventParticipationStatus) *FieldError {
+	switch status {
+	case domain.EventParticipationStatusNeedsAction, domain.EventParticipationStatusAccepted, domain.EventParticipationStatusDeclined, domain.EventParticipationStatusTentative, domain.EventParticipationStatusDelegated:
+		return nil
+	default:
+		return &FieldError{Field: "attendees.participationStatus", Message: "participationStatus must be needs_action, accepted, declined, tentative, or delegated"}
+	}
+}
+
+func validAttendeeEmail(value string) bool {
+	if strings.Count(value, "@") != 1 {
+		return false
+	}
+	parts := strings.Split(value, "@")
+	if parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	return !strings.ContainsFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+}
+
 func buildReminderRules(input []domain.ReminderRule, now time.Time) []domain.ReminderRule {
 	if len(input) == 0 {
 		return []domain.ReminderRule{}
@@ -1087,6 +1152,46 @@ func buildReminderRules(input []domain.ReminderRule, now time.Time) []domain.Rem
 		reminders = append(reminders, built)
 	}
 	return reminders
+}
+
+func buildEventAttendees(input []domain.EventAttendee, now time.Time) []domain.EventAttendee {
+	if len(input) == 0 {
+		return []domain.EventAttendee{}
+	}
+	attendees := make([]domain.EventAttendee, 0, len(input))
+	for _, attendee := range input {
+		built := domain.EventAttendee{
+			Email:               strings.TrimSpace(attendee.Email),
+			DisplayName:         sanitizeOptionalString(attendee.DisplayName),
+			Role:                defaultEventAttendeeRole(attendee.Role),
+			ParticipationStatus: defaultEventParticipationStatus(attendee.ParticipationStatus),
+			RSVP:                attendee.RSVP,
+			CreatedAt:           attendee.CreatedAt,
+			UpdatedAt:           attendee.UpdatedAt,
+		}
+		if built.CreatedAt.IsZero() {
+			built.CreatedAt = now
+		}
+		if built.UpdatedAt.IsZero() {
+			built.UpdatedAt = now
+		}
+		attendees = append(attendees, built)
+	}
+	return attendees
+}
+
+func defaultEventAttendeeRole(role domain.EventAttendeeRole) domain.EventAttendeeRole {
+	if role == "" {
+		return domain.EventAttendeeRoleRequired
+	}
+	return role
+}
+
+func defaultEventParticipationStatus(status domain.EventParticipationStatus) domain.EventParticipationStatus {
+	if status == "" {
+		return domain.EventParticipationStatusNeedsAction
+	}
+	return status
 }
 
 func validateRecurrence(rule *domain.RecurrenceRule, timed bool) []FieldError {
@@ -1330,6 +1435,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 				Description:   cloneStringPtr(event.Description),
 				StartAt:       cloneTimePtr(&occurrence),
 				EndAt:         cloneTimePtr(&endAt),
+				Attendees:     cloneEventAttendees(event.Attendees),
 				LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 			}
 			if event.EndAt == nil {
@@ -1370,6 +1476,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 				Description:   cloneStringPtr(event.Description),
 				StartDate:     &startDate,
 				EndDate:       &endDate,
+				Attendees:     cloneEventAttendees(event.Attendees),
 				LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 			}
 			if spanDays == 1 {
@@ -1814,6 +1921,19 @@ func cloneTimePtr(value *time.Time) *time.Time {
 
 	result := *value
 	return &result
+}
+
+func cloneEventAttendees(values []domain.EventAttendee) []domain.EventAttendee {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]domain.EventAttendee, 0, len(values))
+	for _, value := range values {
+		attendee := value
+		attendee.DisplayName = cloneStringPtr(value.DisplayName)
+		out = append(out, attendee)
+	}
+	return out
 }
 
 func cloneRule(value *domain.RecurrenceRule) *domain.RecurrenceRule {

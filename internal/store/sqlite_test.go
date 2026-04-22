@@ -25,9 +25,11 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
+		"event_attendees",
+		"event_attendees_event_position_idx",
 		"event_task_links",
 		"event_task_links_task_idx",
 		"events",
@@ -61,7 +63,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -134,7 +136,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -157,7 +159,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (5);
+		INSERT INTO schema_migrations (version) VALUES (6);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -170,7 +172,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 5 is newer than supported version 4") {
+	if !strings.Contains(err.Error(), "database schema version 6 is newer than supported version 5") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -321,6 +323,130 @@ func TestEventAndTaskRemindersPersistUpdateClearAndCascade(t *testing.T) {
 	}
 	if _, err := repository.GetReminder("rem-task-90"); err != ErrNotFound {
 		t.Fatalf("GetReminder(deleted task reminder) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestEventAttendeesPersistUpdateClearAndCascade(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	calendar := domain.Calendar{ID: "cal-attendees", Name: "Attendees", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(calendar); err != nil {
+		t.Fatalf("CreateCalendar(): %v", err)
+	}
+
+	event := domain.Event{
+		ID:         "event-attendees",
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartDate:  stringPtr("2026-04-21"),
+		Attendees: []domain.EventAttendee{
+			{
+				Email:               "alex@example.com",
+				DisplayName:         stringPtr("Alex Rivera"),
+				Role:                domain.EventAttendeeRoleRequired,
+				ParticipationStatus: domain.EventParticipationStatusAccepted,
+				RSVP:                true,
+				CreatedAt:           now,
+				UpdatedAt:           now,
+			},
+			{
+				Email:               "sam@example.com",
+				Role:                domain.EventAttendeeRoleOptional,
+				ParticipationStatus: domain.EventParticipationStatusNeedsAction,
+				CreatedAt:           now,
+				UpdatedAt:           now,
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := repository.CreateEvent(event); err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	storedEvent, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(): %v", err)
+	}
+	if len(storedEvent.Attendees) != 2 || storedEvent.Attendees[0].Email != "alex@example.com" || storedEvent.Attendees[0].DisplayName == nil || !storedEvent.Attendees[0].RSVP {
+		t.Fatalf("event attendees = %#v, want persisted attendees in order", storedEvent.Attendees)
+	}
+
+	updatedTitle := storedEvent
+	updatedTitle.Title = "Planning updated"
+	updatedTitle.UpdatedAt = now.Add(time.Minute)
+	if err := repository.UpdateEvent(updatedTitle); err != nil {
+		t.Fatalf("UpdateEvent(title): %v", err)
+	}
+	preserved, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(preserved): %v", err)
+	}
+	if len(preserved.Attendees) != 2 || preserved.Attendees[0].Email != "alex@example.com" {
+		t.Fatalf("preserved attendees = %#v, want existing attendees", preserved.Attendees)
+	}
+
+	replacedEvent := preserved
+	replacedEvent.Attendees = []domain.EventAttendee{
+		{
+			Email:               "taylor@example.com",
+			Role:                domain.EventAttendeeRoleChair,
+			ParticipationStatus: domain.EventParticipationStatusTentative,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+		},
+	}
+	replacedEvent.UpdatedAt = now.Add(2 * time.Minute)
+	if err := repository.UpdateEvent(replacedEvent); err != nil {
+		t.Fatalf("UpdateEvent(replace attendees): %v", err)
+	}
+	replaced, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(replaced): %v", err)
+	}
+	if len(replaced.Attendees) != 1 || replaced.Attendees[0].Email != "taylor@example.com" || replaced.Attendees[0].Role != domain.EventAttendeeRoleChair {
+		t.Fatalf("replaced attendees = %#v, want replacement attendee", replaced.Attendees)
+	}
+
+	clearedEvent := replaced
+	clearedEvent.Attendees = nil
+	clearedEvent.UpdatedAt = now.Add(3 * time.Minute)
+	if err := repository.UpdateEvent(clearedEvent); err != nil {
+		t.Fatalf("UpdateEvent(clear attendees): %v", err)
+	}
+	cleared, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(cleared): %v", err)
+	}
+	if len(cleared.Attendees) != 0 {
+		t.Fatalf("cleared attendees = %#v, want none", cleared.Attendees)
+	}
+
+	cascadeEvent := event
+	cascadeEvent.ID = "event-attendees-cascade"
+	if err := repository.CreateEvent(cascadeEvent); err != nil {
+		t.Fatalf("CreateEvent(cascade): %v", err)
+	}
+	if err := repository.DeleteEvent(cascadeEvent.ID); err != nil {
+		t.Fatalf("DeleteEvent(cascade): %v", err)
+	}
+	var attendeeCount int
+	if err := repository.db.QueryRow(`SELECT COUNT(*) FROM event_attendees WHERE event_id = ?`, cascadeEvent.ID).Scan(&attendeeCount); err != nil {
+		t.Fatalf("count cascaded attendees: %v", err)
+	}
+	if attendeeCount != 0 {
+		t.Fatalf("attendees after cascade = %d, want 0", attendeeCount)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 
@@ -63,6 +64,7 @@ type PlanningTaskRequest struct {
 	DueDate              string                 `json:"due_date,omitempty"`
 	Recurrence           *RecurrenceRuleRequest `json:"recurrence,omitempty"`
 	Reminders            []ReminderRuleRequest  `json:"reminders,omitempty"`
+	Attendees            []EventAttendeeRequest `json:"attendees,omitempty"`
 	Priority             string                 `json:"priority,omitempty"`
 	Status               string                 `json:"status,omitempty"`
 	Tags                 []string               `json:"tags,omitempty"`
@@ -92,6 +94,14 @@ type RecurrenceRuleRequest struct {
 
 type ReminderRuleRequest struct {
 	BeforeMinutes int32 `json:"before_minutes"`
+}
+
+type EventAttendeeRequest struct {
+	Email               string `json:"email"`
+	DisplayName         string `json:"display_name,omitempty"`
+	Role                string `json:"role,omitempty"`
+	ParticipationStatus string `json:"participation_status,omitempty"`
+	RSVP                bool   `json:"rsvp,omitempty"`
 }
 
 type PlanningTaskResult struct {
@@ -135,6 +145,7 @@ type EventEntry struct {
 	EndDate       string                `json:"end_date,omitempty"`
 	Recurrence    *RecurrenceRuleResult `json:"recurrence,omitempty"`
 	Reminders     []ReminderRuleEntry   `json:"reminders,omitempty"`
+	Attendees     []EventAttendeeEntry  `json:"attendees,omitempty"`
 	LinkedTaskIDs []string              `json:"linked_task_ids,omitempty"`
 }
 
@@ -155,24 +166,25 @@ type TaskEntry struct {
 }
 
 type AgendaEntry struct {
-	Kind           string   `json:"kind"`
-	OccurrenceKey  string   `json:"occurrence_key"`
-	CalendarID     string   `json:"calendar_id"`
-	SourceID       string   `json:"source_id"`
-	Title          string   `json:"title"`
-	Description    *string  `json:"description,omitempty"`
-	StartAt        string   `json:"start_at,omitempty"`
-	EndAt          string   `json:"end_at,omitempty"`
-	StartDate      string   `json:"start_date,omitempty"`
-	EndDate        string   `json:"end_date,omitempty"`
-	DueAt          string   `json:"due_at,omitempty"`
-	DueDate        string   `json:"due_date,omitempty"`
-	Priority       string   `json:"priority,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	Tags           []string `json:"tags,omitempty"`
-	LinkedTaskIDs  []string `json:"linked_task_ids,omitempty"`
-	LinkedEventIDs []string `json:"linked_event_ids,omitempty"`
-	CompletedAt    string   `json:"completed_at,omitempty"`
+	Kind           string               `json:"kind"`
+	OccurrenceKey  string               `json:"occurrence_key"`
+	CalendarID     string               `json:"calendar_id"`
+	SourceID       string               `json:"source_id"`
+	Title          string               `json:"title"`
+	Description    *string              `json:"description,omitempty"`
+	StartAt        string               `json:"start_at,omitempty"`
+	EndAt          string               `json:"end_at,omitempty"`
+	StartDate      string               `json:"start_date,omitempty"`
+	EndDate        string               `json:"end_date,omitempty"`
+	DueAt          string               `json:"due_at,omitempty"`
+	DueDate        string               `json:"due_date,omitempty"`
+	Priority       string               `json:"priority,omitempty"`
+	Status         string               `json:"status,omitempty"`
+	Tags           []string             `json:"tags,omitempty"`
+	Attendees      []EventAttendeeEntry `json:"attendees,omitempty"`
+	LinkedTaskIDs  []string             `json:"linked_task_ids,omitempty"`
+	LinkedEventIDs []string             `json:"linked_event_ids,omitempty"`
+	CompletedAt    string               `json:"completed_at,omitempty"`
 }
 
 type EventTaskLinkEntry struct {
@@ -183,6 +195,14 @@ type EventTaskLinkEntry struct {
 type ReminderRuleEntry struct {
 	ID            string `json:"id"`
 	BeforeMinutes int32  `json:"before_minutes"`
+}
+
+type EventAttendeeEntry struct {
+	Email               string  `json:"email"`
+	DisplayName         *string `json:"display_name,omitempty"`
+	Role                string  `json:"role"`
+	ParticipationStatus string  `json:"participation_status"`
+	RSVP                bool    `json:"rsvp"`
 }
 
 type ReminderEntry struct {
@@ -295,6 +315,7 @@ var knownPlanningTaskFields = map[string]bool{
 	"due_date":               true,
 	"recurrence":             true,
 	"reminders":              true,
+	"attendees":              true,
 	"priority":               true,
 	"status":                 true,
 	"tags":                   true,
@@ -322,6 +343,7 @@ func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRe
 	request.EventPatch.EndDate = jsonStringPatch(raw, "end_date")
 	request.EventPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
 	request.EventPatch.Reminders = jsonRemindersPatch(raw, "reminders")
+	request.EventPatch.Attendees = jsonAttendeesPatch(raw, "attendees")
 
 	request.TaskPatch.Title = jsonStringPatch(raw, "title")
 	request.TaskPatch.Description = jsonStringPatch(raw, "description")
@@ -404,6 +426,25 @@ func jsonRemindersPatch(raw map[string]json.RawMessage, key string) domain.Patch
 		return domain.PatchField[[]domain.ReminderRule]{Present: true}
 	}
 	return domain.SetPatch(reminders)
+}
+
+func jsonAttendeesPatch(raw map[string]json.RawMessage, key string) domain.PatchField[[]domain.EventAttendee] {
+	value, ok := raw[key]
+	if !ok {
+		return domain.PatchField[[]domain.EventAttendee]{}
+	}
+	if isJSONNull(value) {
+		return domain.ClearPatch[[]domain.EventAttendee]()
+	}
+	var request []EventAttendeeRequest
+	if err := json.Unmarshal(value, &request); err != nil {
+		return domain.PatchField[[]domain.EventAttendee]{}
+	}
+	attendees, rejection := normalizeAttendees(request)
+	if rejection != "" {
+		return domain.PatchField[[]domain.EventAttendee]{Present: true}
+	}
+	return domain.SetPatch(attendees)
 }
 
 func jsonTaskPriorityPatch(raw map[string]json.RawMessage, key string) domain.PatchField[domain.TaskPriority] {
@@ -1328,6 +1369,20 @@ func normalizeEventPatchInput(request PlanningTaskRequest) (domain.EventPatch, s
 		}
 		patch.Reminders = domain.SetPatch(reminders)
 	}
+	if !patch.Attendees.Present && request.Attendees != nil {
+		attendees, rejection := normalizeAttendees(request.Attendees)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.Attendees = domain.SetPatch(attendees)
+	}
+	if patch.Attendees.Present && !patch.Attendees.Clear && request.Attendees != nil {
+		attendees, rejection := normalizeAttendees(request.Attendees)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.Attendees = domain.SetPatch(attendees)
+	}
 	if patch.Title.Clear {
 		return domain.EventPatch{}, "title cannot be cleared"
 	}
@@ -1549,6 +1604,10 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 	if rejection != "" {
 		return domain.Event{}, rejection
 	}
+	attendees, rejection := normalizeAttendees(request.Attendees)
+	if rejection != "" {
+		return domain.Event{}, rejection
+	}
 	return domain.Event{
 		Title:       title,
 		Description: request.Description,
@@ -1559,6 +1618,7 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 		EndDate:     endDate,
 		Recurrence:  recurrence,
 		Reminders:   reminders,
+		Attendees:   attendees,
 	}, ""
 }
 
@@ -1796,6 +1856,87 @@ func normalizeReminders(values []ReminderRuleRequest) ([]domain.ReminderRule, st
 	return reminders, ""
 }
 
+func normalizeAttendees(values []EventAttendeeRequest) ([]domain.EventAttendee, string) {
+	if values == nil {
+		return []domain.EventAttendee{}, ""
+	}
+	attendees := make([]domain.EventAttendee, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		email := strings.TrimSpace(value.Email)
+		if !validAttendeeEmail(email) {
+			return nil, "attendees.email must be a valid email address"
+		}
+		emailKey := strings.ToLower(email)
+		if seen[emailKey] {
+			return nil, "attendees cannot contain duplicate email values"
+		}
+		seen[emailKey] = true
+
+		role, rejection := normalizeAttendeeRole(value.Role)
+		if rejection != "" {
+			return nil, rejection
+		}
+		status, rejection := normalizeParticipationStatus(value.ParticipationStatus)
+		if rejection != "" {
+			return nil, rejection
+		}
+		attendees = append(attendees, domain.EventAttendee{
+			Email:               email,
+			DisplayName:         sanitizeOptionalString(value.DisplayName),
+			Role:                role,
+			ParticipationStatus: status,
+			RSVP:                value.RSVP,
+		})
+	}
+	return attendees, ""
+}
+
+func normalizeAttendeeRole(value string) (domain.EventAttendeeRole, string) {
+	value = strings.TrimSpace(value)
+	switch domain.EventAttendeeRole(value) {
+	case "":
+		return domain.EventAttendeeRoleRequired, ""
+	case domain.EventAttendeeRoleRequired, domain.EventAttendeeRoleOptional, domain.EventAttendeeRoleChair, domain.EventAttendeeRoleNonParticipant:
+		return domain.EventAttendeeRole(value), ""
+	default:
+		return "", "attendees.role must be required, optional, chair, or non_participant"
+	}
+}
+
+func normalizeParticipationStatus(value string) (domain.EventParticipationStatus, string) {
+	value = strings.TrimSpace(value)
+	switch domain.EventParticipationStatus(value) {
+	case "":
+		return domain.EventParticipationStatusNeedsAction, ""
+	case domain.EventParticipationStatusNeedsAction, domain.EventParticipationStatusAccepted, domain.EventParticipationStatusDeclined, domain.EventParticipationStatusTentative, domain.EventParticipationStatusDelegated:
+		return domain.EventParticipationStatus(value), ""
+	default:
+		return "", "attendees.participation_status must be needs_action, accepted, declined, tentative, or delegated"
+	}
+}
+
+func validAttendeeEmail(value string) bool {
+	if strings.Count(value, "@") != 1 {
+		return false
+	}
+	parts := strings.Split(value, "@")
+	if parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	return !strings.ContainsFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+}
+
+func sanitizeOptionalString(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
 func calendarName(request PlanningTaskRequest) string {
 	if name := strings.TrimSpace(request.CalendarName); name != "" {
 		return name
@@ -1862,7 +2003,8 @@ func eventPatchHasUpdate(patch domain.EventPatch) bool {
 		patch.StartDate.Present ||
 		patch.EndDate.Present ||
 		patch.Recurrence.Present ||
-		patch.Reminders.Present
+		patch.Reminders.Present ||
+		patch.Attendees.Present
 }
 
 func taskPatchHasUpdate(patch domain.TaskPatch) bool {
@@ -1978,6 +2120,7 @@ func eventEntry(event domain.Event) EventEntry {
 		EndDate:       stringValue(event.EndDate),
 		Recurrence:    recurrenceResult(event.Recurrence),
 		Reminders:     reminderRuleEntries(event.Reminders),
+		Attendees:     attendeeEntries(event.Attendees),
 		LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 	}
 	if event.StartAt != nil {
@@ -2034,6 +2177,23 @@ func reminderRuleEntries(reminders []domain.ReminderRule) []ReminderRuleEntry {
 	return out
 }
 
+func attendeeEntries(attendees []domain.EventAttendee) []EventAttendeeEntry {
+	if len(attendees) == 0 {
+		return nil
+	}
+	out := make([]EventAttendeeEntry, 0, len(attendees))
+	for _, attendee := range attendees {
+		out = append(out, EventAttendeeEntry{
+			Email:               attendee.Email,
+			DisplayName:         cloneString(attendee.DisplayName),
+			Role:                string(attendee.Role),
+			ParticipationStatus: string(attendee.ParticipationStatus),
+			RSVP:                attendee.RSVP,
+		})
+	}
+	return out
+}
+
 func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 	out := make([]AgendaEntry, 0, len(items))
 	for _, item := range items {
@@ -2050,6 +2210,7 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 			Priority:       string(item.Priority),
 			Status:         string(item.Status),
 			Tags:           slices.Clone(item.Tags),
+			Attendees:      attendeeEntries(item.Attendees),
 			LinkedTaskIDs:  slices.Clone(item.LinkedTaskIDs),
 			LinkedEventIDs: slices.Clone(item.LinkedEventIDs),
 		}

@@ -104,6 +104,10 @@ any CLI when the request has:
 | invalid task tags with spaces or punctuation | require lowercase letters, digits, `_`, or `-` |
 | non-positive reminder offset | require a positive `before_minutes` value |
 | duplicate reminder offsets on one item | require one reminder per offset |
+| invalid event attendee email | require a plain email address |
+| duplicate event attendee emails | require one attendee per email |
+| invalid event attendee role | require `required`, `optional`, `chair`, or `non_participant` |
+| invalid event attendee participation status | require `needs_action`, `accepted`, `declined`, `tentative`, or `delegated` |
 
 Never convert a year-first slash date to dashed ISO form; reject it. Never
 convert an invalid RFC3339 time like `2026-04-16 09:00` to
@@ -139,9 +143,11 @@ Events:
 {"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}
 {"action":"create_event","calendar_name":"Work","title":"Weekly sync","start_at":"2026-04-13T09:00:00Z","end_at":"2026-04-13T09:30:00Z","recurrence":{"frequency":"weekly","by_weekday":["MO","WE"],"count":4}}
 {"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","reminders":[{"before_minutes":30}]}
+{"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","attendees":[{"email":"alex@example.com","display_name":"Alex Rivera","role":"required","participation_status":"accepted","rsvp":true}]}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","reminders":null}
+{"action":"update_event","event_id":"<id-from-prior-runner-result>","attendees":null}
 {"action":"delete_event","event_id":"<id-from-prior-runner-result>"}
 ```
 

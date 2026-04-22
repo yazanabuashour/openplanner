@@ -104,6 +104,19 @@ fields are set, and `null` clears clearable optional fields. Use `event_id` for
 `update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
 `calendar_name` for `update_calendar`.
 
+Events support optional attendee metadata through `attendees`. Each attendee
+requires `email`; optional fields are `display_name`, `role`, `participation_status`,
+and `rsvp`. `role` defaults to `required` and accepts `required`, `optional`,
+`chair`, or `non_participant`. `participation_status` defaults to
+`needs_action` and accepts `needs_action`, `accepted`, `declined`, `tentative`,
+or `delegated`. Duplicate attendee emails on one event are rejected
+case-insensitively.
+
+```json
+{"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","attendees":[{"email":"alex@example.com","display_name":"Alex Rivera","role":"required","participation_status":"accepted","rsvp":true}]}
+{"action":"update_event","event_id":"<id-from-prior-runner-result>","attendees":null}
+```
+
 Tasks support optional metadata. `priority` is one of `low`, `medium`, or
 `high` and defaults to `medium`. `status` is one of `todo`, `in_progress`, or
 `done` and defaults to `todo`. `tags` is an array of lowercase labels using

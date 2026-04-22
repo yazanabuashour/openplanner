@@ -150,6 +150,27 @@ var migrations = []migration{
 			CREATE INDEX IF NOT EXISTS event_task_links_task_idx ON event_task_links(task_id, event_id);
 		`,
 	},
+	{
+		version: 5,
+		name:    "event attendees",
+		sql: `
+			CREATE TABLE IF NOT EXISTS event_attendees (
+				event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+				email TEXT NOT NULL,
+				email_key TEXT NOT NULL,
+				display_name TEXT,
+				role TEXT NOT NULL CHECK (role IN ('required', 'optional', 'chair', 'non_participant')),
+				participation_status TEXT NOT NULL CHECK (participation_status IN ('needs_action', 'accepted', 'declined', 'tentative', 'delegated')),
+				rsvp INTEGER NOT NULL CHECK (rsvp IN (0, 1)),
+				position INTEGER NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (event_id, email_key)
+			);
+
+			CREATE INDEX IF NOT EXISTS event_attendees_event_position_idx ON event_attendees(event_id, position);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -296,6 +317,9 @@ func (store *Store) CreateEvent(event domain.Event) error {
 	if err := insertReminders(tx, domain.ReminderOwnerKindEvent, event.ID, event.Reminders); err != nil {
 		return err
 	}
+	if err := insertEventAttendees(tx, event.ID, event.Attendees); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit create event: %w", err)
 	}
@@ -331,6 +355,9 @@ func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 	if err := store.loadEventReminders(events); err != nil {
 		return nil, err
 	}
+	if err := store.loadEventAttendees(events); err != nil {
+		return nil, err
+	}
 	if err := store.loadEventLinkedTaskIDs(events); err != nil {
 		return nil, err
 	}
@@ -356,6 +383,9 @@ func (store *Store) GetEvent(id string) (domain.Event, error) {
 
 	events := []domain.Event{event}
 	if err := store.loadEventReminders(events); err != nil {
+		return domain.Event{}, err
+	}
+	if err := store.loadEventAttendees(events); err != nil {
 		return domain.Event{}, err
 	}
 	if err := store.loadEventLinkedTaskIDs(events); err != nil {
@@ -396,6 +426,9 @@ func (store *Store) UpdateEvent(event domain.Event) error {
 	}
 
 	if err := replaceRemindersIfChanged(tx, domain.ReminderOwnerKindEvent, event.ID, event.Reminders); err != nil {
+		return err
+	}
+	if err := replaceEventAttendeesIfChanged(tx, event.ID, event.Attendees); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -888,6 +921,89 @@ func remindersEqual(left []domain.ReminderRule, right []domain.ReminderRule) boo
 	return true
 }
 
+func insertEventAttendees(tx *sql.Tx, eventID string, attendees []domain.EventAttendee) error {
+	for position, attendee := range attendees {
+		rsvp := 0
+		if attendee.RSVP {
+			rsvp = 1
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO event_attendees (
+				event_id, email, email_key, display_name, role, participation_status,
+				rsvp, position, created_at, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, eventID, attendee.Email, eventAttendeeEmailKey(attendee.Email), nullableString(attendee.DisplayName),
+			attendee.Role, attendee.ParticipationStatus, rsvp, position, formatTime(attendee.CreatedAt), formatTime(attendee.UpdatedAt)); err != nil {
+			return mapWriteError(err)
+		}
+	}
+
+	return nil
+}
+
+func replaceEventAttendeesIfChanged(tx *sql.Tx, eventID string, attendees []domain.EventAttendee) error {
+	current, err := listEventAttendeesTx(tx, eventID)
+	if err != nil {
+		return err
+	}
+	if eventAttendeesEqual(current, attendees) {
+		return nil
+	}
+
+	if _, err := tx.Exec(`DELETE FROM event_attendees WHERE event_id = ?`, eventID); err != nil {
+		return fmt.Errorf("delete event attendees: %w", err)
+	}
+
+	return insertEventAttendees(tx, eventID, attendees)
+}
+
+func listEventAttendeesTx(tx *sql.Tx, eventID string) ([]domain.EventAttendee, error) {
+	rows, err := tx.Query(`
+		SELECT email, display_name, role, participation_status, rsvp, created_at, updated_at
+		FROM event_attendees
+		WHERE event_id = ?
+		ORDER BY position ASC, email_key ASC
+	`, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("list event attendees: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	return scanEventAttendees(rows)
+}
+
+func eventAttendeesEqual(left []domain.EventAttendee, right []domain.EventAttendee) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Email != right[index].Email ||
+			attendeeStringValue(left[index].DisplayName) != attendeeStringValue(right[index].DisplayName) ||
+			left[index].Role != right[index].Role ||
+			left[index].ParticipationStatus != right[index].ParticipationStatus ||
+			left[index].RSVP != right[index].RSVP ||
+			!left[index].CreatedAt.Equal(right[index].CreatedAt) ||
+			!left[index].UpdatedAt.Equal(right[index].UpdatedAt) {
+			return false
+		}
+	}
+	return true
+}
+
+func eventAttendeeEmailKey(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func attendeeStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func (store *Store) loadEventReminders(events []domain.Event) error {
 	ownerIDs := make([]string, 0, len(events))
 	for _, event := range events {
@@ -899,6 +1015,21 @@ func (store *Store) loadEventReminders(events []domain.Event) error {
 	}
 	for index := range events {
 		events[index].Reminders = byOwner[events[index].ID]
+	}
+	return nil
+}
+
+func (store *Store) loadEventAttendees(events []domain.Event) error {
+	eventIDs := make([]string, 0, len(events))
+	for _, event := range events {
+		eventIDs = append(eventIDs, event.ID)
+	}
+	byEvent, err := store.loadAttendees(eventIDs)
+	if err != nil {
+		return err
+	}
+	for index := range events {
+		events[index].Attendees = byEvent[events[index].ID]
 	}
 	return nil
 }
@@ -991,6 +1122,46 @@ func (store *Store) loadReminders(ownerKind domain.ReminderOwnerKind, ownerIDs [
 	}
 
 	return byOwner, nil
+}
+
+func (store *Store) loadAttendees(eventIDs []string) (map[string][]domain.EventAttendee, error) {
+	byEvent := make(map[string][]domain.EventAttendee, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return byEvent, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(eventIDs)), ",")
+	args := make([]any, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		args = append(args, eventID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT event_id, email, display_name, role, participation_status, rsvp, created_at, updated_at
+		FROM event_attendees
+		WHERE event_id IN (`+placeholders+`)
+		ORDER BY event_id ASC, position ASC, email_key ASC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load attendees: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var eventID string
+		attendee, err := scanEventAttendeeWithEventID(rows, &eventID)
+		if err != nil {
+			return nil, fmt.Errorf("scan attendee: %w", err)
+		}
+		byEvent[eventID] = append(byEvent[eventID], attendee)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate attendees: %w", err)
+	}
+
+	return byEvent, nil
 }
 
 func (store *Store) loadLinkedTaskIDs(eventIDs []string) (map[string][]string, error) {
@@ -1334,6 +1505,64 @@ func scanReminder(scanner interface {
 	reminder.CreatedAt = parseStoredTime(createdAt)
 	reminder.UpdatedAt = parseStoredTime(updatedAt)
 	return reminder, nil
+}
+
+func scanEventAttendees(rows *sql.Rows) ([]domain.EventAttendee, error) {
+	var attendees []domain.EventAttendee
+	for rows.Next() {
+		attendee, err := scanEventAttendee(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan event attendee: %w", err)
+		}
+		attendees = append(attendees, attendee)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate event attendees: %w", err)
+	}
+
+	return attendees, nil
+}
+
+func scanEventAttendee(scanner interface {
+	Scan(dest ...any) error
+}) (domain.EventAttendee, error) {
+	var attendee domain.EventAttendee
+	var displayName sql.NullString
+	var rsvp int
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(
+		&attendee.Email, &displayName, &attendee.Role, &attendee.ParticipationStatus,
+		&rsvp, &createdAt, &updatedAt,
+	); err != nil {
+		return domain.EventAttendee{}, err
+	}
+	attendee.DisplayName = parseNullableString(displayName)
+	attendee.RSVP = rsvp != 0
+	attendee.CreatedAt = parseStoredTime(createdAt)
+	attendee.UpdatedAt = parseStoredTime(updatedAt)
+	return attendee, nil
+}
+
+func scanEventAttendeeWithEventID(scanner interface {
+	Scan(dest ...any) error
+}, eventID *string) (domain.EventAttendee, error) {
+	var attendee domain.EventAttendee
+	var displayName sql.NullString
+	var rsvp int
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(
+		eventID, &attendee.Email, &displayName, &attendee.Role, &attendee.ParticipationStatus,
+		&rsvp, &createdAt, &updatedAt,
+	); err != nil {
+		return domain.EventAttendee{}, err
+	}
+	attendee.DisplayName = parseNullableString(displayName)
+	attendee.RSVP = rsvp != 0
+	attendee.CreatedAt = parseStoredTime(createdAt)
+	attendee.UpdatedAt = parseStoredTime(updatedAt)
+	return attendee, nil
 }
 
 func scanEventTaskLinks(rows *sql.Rows) ([]domain.EventTaskLink, error) {
