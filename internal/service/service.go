@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -685,7 +686,7 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 	}
 
 	if task.Recurrence == nil {
-		if request.OccurrenceAt != nil || request.OccurrenceDate != nil {
+		if request.OccurrenceKey != "" || request.OccurrenceAt != nil || request.OccurrenceDate != nil {
 			return domain.TaskCompletion{}, &ValidationError{
 				Message: "task completion validation failed",
 				FieldErrors: []FieldError{
@@ -711,8 +712,19 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 			CompletedAt: completedAt,
 		}, nil
 	}
+	if request.OccurrenceKey != "" && (request.OccurrenceAt != nil || request.OccurrenceDate != nil) {
+		return domain.TaskCompletion{}, &ValidationError{
+			Message: "task completion validation failed",
+			FieldErrors: []FieldError{
+				{Field: "occurrence", Message: "use occurrenceKey, occurrenceAt, or occurrenceDate, not more than one"},
+			},
+		}
+	}
 
 	if task.DueAt != nil {
+		if request.OccurrenceKey != "" {
+			return service.completeRecurringTaskByOccurrenceKey(task, request.OccurrenceKey)
+		}
 		if request.OccurrenceAt == nil || request.OccurrenceDate != nil {
 			return domain.TaskCompletion{}, &ValidationError{
 				Message: "task completion validation failed",
@@ -728,6 +740,9 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 					{Field: "occurrenceAt", Message: "occurrenceAt does not match the recurring task schedule"},
 				},
 			}
+		}
+		if service.taskOccurrenceCancelled(task.ID, occurrenceKey(task.ID, request.OccurrenceAt, nil)) {
+			return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is canceled"}
 		}
 
 		completion := domain.TaskCompletion{
@@ -747,6 +762,9 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 		return completion, nil
 	}
 
+	if request.OccurrenceKey != "" {
+		return service.completeRecurringTaskByOccurrenceKey(task, request.OccurrenceKey)
+	}
 	if request.OccurrenceDate == nil || request.OccurrenceAt != nil {
 		return domain.TaskCompletion{}, &ValidationError{
 			Message: "task completion validation failed",
@@ -762,6 +780,9 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 				{Field: "occurrenceDate", Message: "occurrenceDate does not match the recurring task schedule"},
 			},
 		}
+	}
+	if service.taskOccurrenceCancelled(task.ID, occurrenceKey(task.ID, nil, request.OccurrenceDate)) {
+		return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is canceled"}
 	}
 
 	completion := domain.TaskCompletion{
@@ -779,6 +800,274 @@ func (service *Service) CompleteTask(id string, request domain.TaskCompletionReq
 	}
 
 	return completion, nil
+}
+
+func (service *Service) CancelEventOccurrence(id string, request domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	event, err := service.GetEvent(id)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	state, err := service.validateEventOccurrenceMutation(event, request, true)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.upsertOccurrenceState(state)
+}
+
+func (service *Service) RescheduleEventOccurrence(id string, request domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	event, err := service.GetEvent(id)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	state, err := service.validateEventOccurrenceMutation(event, request, false)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.upsertOccurrenceState(state)
+}
+
+func (service *Service) CancelTaskOccurrence(id string, request domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	task, err := service.GetTask(id)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	state, err := service.validateTaskOccurrenceMutation(task, request, true)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.upsertOccurrenceState(state)
+}
+
+func (service *Service) RescheduleTaskOccurrence(id string, request domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	task, err := service.GetTask(id)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	state, err := service.validateTaskOccurrenceMutation(task, request, false)
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.upsertOccurrenceState(state)
+}
+
+func (service *Service) completeRecurringTaskByOccurrenceKey(task domain.Task, key string) (domain.TaskCompletion, error) {
+	occurrenceAt, occurrenceDate, err := parseOccurrenceKey(task.ID, strings.TrimSpace(key))
+	if err != nil {
+		return domain.TaskCompletion{}, &ValidationError{
+			Message: "task completion validation failed",
+			FieldErrors: []FieldError{
+				{Field: "occurrenceKey", Message: "occurrenceKey must match a recurring task occurrence"},
+			},
+		}
+	}
+	if task.DueAt != nil {
+		if occurrenceAt == nil || occurrenceDate != nil || !recurrence.IncludesTimed(*task.DueAt, task.Recurrence, *occurrenceAt) {
+			return domain.TaskCompletion{}, &ValidationError{
+				Message: "task completion validation failed",
+				FieldErrors: []FieldError{
+					{Field: "occurrenceKey", Message: "occurrenceKey does not match the recurring task schedule"},
+				},
+			}
+		}
+		if service.taskOccurrenceCancelled(task.ID, key) {
+			return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is canceled"}
+		}
+		completion := domain.TaskCompletion{
+			TaskID:        task.ID,
+			OccurrenceKey: key,
+			OccurrenceAt:  cloneTimePtr(occurrenceAt),
+			CompletedAt:   service.now(),
+		}
+		if err := service.store.CreateTaskCompletion(completion); err != nil {
+			if errors.Is(err, store.ErrConflict) {
+				return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is already completed"}
+			}
+			return domain.TaskCompletion{}, err
+		}
+		return completion, nil
+	}
+
+	if occurrenceDate == nil || occurrenceAt != nil || !recurrence.IncludesDate(*task.DueDate, task.Recurrence, *occurrenceDate) {
+		return domain.TaskCompletion{}, &ValidationError{
+			Message: "task completion validation failed",
+			FieldErrors: []FieldError{
+				{Field: "occurrenceKey", Message: "occurrenceKey does not match the recurring task schedule"},
+			},
+		}
+	}
+	if service.taskOccurrenceCancelled(task.ID, key) {
+		return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is canceled"}
+	}
+	completion := domain.TaskCompletion{
+		TaskID:         task.ID,
+		OccurrenceKey:  key,
+		OccurrenceDate: sanitizeOptionalString(occurrenceDate),
+		CompletedAt:    service.now(),
+	}
+	if err := service.store.CreateTaskCompletion(completion); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return domain.TaskCompletion{}, &ConflictError{Message: "task occurrence is already completed"}
+		}
+		return domain.TaskCompletion{}, err
+	}
+	return completion, nil
+}
+
+func (service *Service) taskOccurrenceCancelled(taskID string, key string) bool {
+	states, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindTask, []string{taskID})
+	if err != nil {
+		return false
+	}
+	return states[taskID][key].Cancelled
+}
+
+func (service *Service) validateEventOccurrenceMutation(event domain.Event, request domain.OccurrenceMutationRequest, cancel bool) (domain.OccurrenceState, error) {
+	if event.Recurrence == nil {
+		return domain.OccurrenceState{}, &ValidationError{
+			Message:     "event occurrence validation failed",
+			FieldErrors: []FieldError{{Field: "recurrence", Message: "event is not recurring"}},
+		}
+	}
+	now := service.now()
+	state := domain.OccurrenceState{
+		OwnerKind: domain.OccurrenceOwnerKindEvent,
+		OwnerID:   event.ID,
+		Cancelled: cancel,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	switch {
+	case event.StartAt != nil:
+		if request.OccurrenceAt == nil || request.OccurrenceDate != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "recurring timed events require occurrenceAt")
+		}
+		if !recurrence.IncludesTimed(*event.StartAt, event.Recurrence, *request.OccurrenceAt) {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "occurrenceAt does not match the recurring event schedule")
+		}
+		state.OccurrenceKey = occurrenceKey(event.ID, request.OccurrenceAt, nil)
+		state.OccurrenceAt = cloneTimePtr(request.OccurrenceAt)
+		if cancel {
+			if request.ReplacementAt != nil || request.ReplacementEndAt != nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+				return domain.OccurrenceState{}, occurrenceValidationError("replacement", "canceled occurrences cannot include replacement timing")
+			}
+			return state, nil
+		}
+		if request.ReplacementAt == nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("startAt", "rescheduled timed events require startAt")
+		}
+		if request.ReplacementEndAt != nil && !request.ReplacementEndAt.After(*request.ReplacementAt) {
+			return domain.OccurrenceState{}, occurrenceValidationError("endAt", "endAt must be after startAt")
+		}
+		state.ReplacementAt = cloneTimePtr(request.ReplacementAt)
+		state.ReplacementEndAt = cloneTimePtr(request.ReplacementEndAt)
+		return state, nil
+	case event.StartDate != nil:
+		if request.OccurrenceDate == nil || request.OccurrenceAt != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceDate", "recurring all-day events require occurrenceDate")
+		}
+		if !recurrence.IncludesDate(*event.StartDate, event.Recurrence, *request.OccurrenceDate) {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceDate", "occurrenceDate does not match the recurring event schedule")
+		}
+		state.OccurrenceKey = occurrenceKey(event.ID, nil, request.OccurrenceDate)
+		state.OccurrenceDate = sanitizeOptionalString(request.OccurrenceDate)
+		if cancel {
+			if request.ReplacementAt != nil || request.ReplacementEndAt != nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+				return domain.OccurrenceState{}, occurrenceValidationError("replacement", "canceled occurrences cannot include replacement timing")
+			}
+			return state, nil
+		}
+		if request.ReplacementDate == nil || request.ReplacementAt != nil || request.ReplacementEndAt != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("startDate", "rescheduled all-day events require startDate")
+		}
+		if request.ReplacementEndDate != nil && *request.ReplacementEndDate < *request.ReplacementDate {
+			return domain.OccurrenceState{}, occurrenceValidationError("endDate", "endDate must not be before startDate")
+		}
+		state.ReplacementDate = sanitizeOptionalString(request.ReplacementDate)
+		state.ReplacementEndDate = sanitizeOptionalString(request.ReplacementEndDate)
+		return state, nil
+	default:
+		return domain.OccurrenceState{}, occurrenceValidationError("timing", "event start timing is required")
+	}
+}
+
+func (service *Service) validateTaskOccurrenceMutation(task domain.Task, request domain.OccurrenceMutationRequest, cancel bool) (domain.OccurrenceState, error) {
+	if task.Recurrence == nil {
+		return domain.OccurrenceState{}, &ValidationError{
+			Message:     "task occurrence validation failed",
+			FieldErrors: []FieldError{{Field: "recurrence", Message: "task is not recurring"}},
+		}
+	}
+	now := service.now()
+	state := domain.OccurrenceState{
+		OwnerKind: domain.OccurrenceOwnerKindTask,
+		OwnerID:   task.ID,
+		Cancelled: cancel,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	switch {
+	case task.DueAt != nil:
+		if request.OccurrenceAt == nil || request.OccurrenceDate != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "recurring timed tasks require occurrenceAt")
+		}
+		if !recurrence.IncludesTimed(*task.DueAt, task.Recurrence, *request.OccurrenceAt) {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "occurrenceAt does not match the recurring task schedule")
+		}
+		state.OccurrenceKey = occurrenceKey(task.ID, request.OccurrenceAt, nil)
+		state.OccurrenceAt = cloneTimePtr(request.OccurrenceAt)
+		if cancel {
+			if request.ReplacementAt != nil || request.ReplacementEndAt != nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+				return domain.OccurrenceState{}, occurrenceValidationError("replacement", "canceled occurrences cannot include replacement timing")
+			}
+			return state, nil
+		}
+		if request.ReplacementAt == nil || request.ReplacementEndAt != nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("dueAt", "rescheduled timed tasks require dueAt")
+		}
+		state.ReplacementAt = cloneTimePtr(request.ReplacementAt)
+		return state, nil
+	case task.DueDate != nil:
+		if request.OccurrenceDate == nil || request.OccurrenceAt != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceDate", "recurring date-based tasks require occurrenceDate")
+		}
+		if !recurrence.IncludesDate(*task.DueDate, task.Recurrence, *request.OccurrenceDate) {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceDate", "occurrenceDate does not match the recurring task schedule")
+		}
+		state.OccurrenceKey = occurrenceKey(task.ID, nil, request.OccurrenceDate)
+		state.OccurrenceDate = sanitizeOptionalString(request.OccurrenceDate)
+		if cancel {
+			if request.ReplacementAt != nil || request.ReplacementEndAt != nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
+				return domain.OccurrenceState{}, occurrenceValidationError("replacement", "canceled occurrences cannot include replacement timing")
+			}
+			return state, nil
+		}
+		if request.ReplacementDate == nil || request.ReplacementAt != nil || request.ReplacementEndAt != nil || request.ReplacementEndDate != nil {
+			return domain.OccurrenceState{}, occurrenceValidationError("dueDate", "rescheduled date-based tasks require dueDate")
+		}
+		state.ReplacementDate = sanitizeOptionalString(request.ReplacementDate)
+		return state, nil
+	default:
+		return domain.OccurrenceState{}, occurrenceValidationError("due", "task due timing is required")
+	}
+}
+
+func (service *Service) upsertOccurrenceState(state domain.OccurrenceState) (domain.OccurrenceState, error) {
+	if err := service.store.UpsertOccurrenceState(state); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.OccurrenceState{}, &NotFoundError{Message: "recurring owner not found"}
+		}
+		return domain.OccurrenceState{}, err
+	}
+	return state, nil
+}
+
+func occurrenceValidationError(field string, message string) error {
+	return &ValidationError{
+		Message:     "occurrence validation failed",
+		FieldErrors: []FieldError{{Field: field, Message: message}},
+	}
 }
 
 func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[domain.AgendaItem], error) {
@@ -801,6 +1090,12 @@ func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[doma
 	}
 
 	taskIDs := make([]string, 0, len(tasks))
+	eventIDs := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Recurrence != nil {
+			eventIDs = append(eventIDs, event.ID)
+		}
+	}
 	for _, task := range tasks {
 		if task.Recurrence != nil {
 			taskIDs = append(taskIDs, task.ID)
@@ -810,13 +1105,21 @@ func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[doma
 	if err != nil {
 		return domain.Page[domain.AgendaItem]{}, err
 	}
+	eventOccurrenceStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, eventIDs)
+	if err != nil {
+		return domain.Page[domain.AgendaItem]{}, err
+	}
+	taskOccurrenceStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindTask, taskIDs)
+	if err != nil {
+		return domain.Page[domain.AgendaItem]{}, err
+	}
 
 	items := make([]domain.AgendaItem, 0, len(events)+len(tasks))
 	for _, event := range events {
-		items = append(items, agendaItemsForEvent(event, params.From, params.To)...)
+		items = append(items, agendaItemsForEvent(event, eventOccurrenceStates[event.ID], params.From, params.To)...)
 	}
 	for _, task := range tasks {
-		items = append(items, agendaItemsForTask(task, completions[task.ID], params.From, params.To)...)
+		items = append(items, agendaItemsForTask(task, completions[task.ID], taskOccurrenceStates[task.ID], params.From, params.To)...)
 	}
 
 	slices.SortFunc(items, compareAgendaItems)
@@ -853,13 +1156,33 @@ func (service *Service) ListPendingReminders(params domain.ReminderQueryParams) 
 	if err != nil {
 		return domain.Page[domain.PendingReminder]{}, err
 	}
+	eventIDs := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Recurrence != nil {
+			eventIDs = append(eventIDs, event.ID)
+		}
+	}
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Recurrence != nil {
+			taskIDs = append(taskIDs, task.ID)
+		}
+	}
+	eventOccurrenceStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, eventIDs)
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
+	taskOccurrenceStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindTask, taskIDs)
+	if err != nil {
+		return domain.Page[domain.PendingReminder]{}, err
+	}
 
 	items := []domain.PendingReminder{}
 	for _, event := range events {
-		items = append(items, pendingRemindersForEvent(event, dismissals, params.From, params.To)...)
+		items = append(items, pendingRemindersForEvent(event, eventOccurrenceStates[event.ID], dismissals, params.From, params.To)...)
 	}
 	for _, task := range tasks {
-		items = append(items, pendingRemindersForTask(task, dismissals, params.From, params.To)...)
+		items = append(items, pendingRemindersForTask(task, taskOccurrenceStates[task.ID], dismissals, params.From, params.To)...)
 	}
 	slices.SortFunc(items, comparePendingReminders)
 
@@ -1206,11 +1529,14 @@ func validateRecurrence(rule *domain.RecurrenceRule, timed bool) []FieldError {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.frequency", Message: "unsupported recurrence frequency"})
 	}
 
-	if rule.Interval < 0 {
+	if rule.Interval <= 0 {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.interval", Message: "interval must be greater than 0"})
 	}
 	if rule.Count != nil && *rule.Count < 1 {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.count", Message: "count must be greater than 0"})
+	}
+	if rule.Count != nil && (rule.UntilAt != nil || rule.UntilDate != nil) {
+		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence", Message: "use count or until, not both"})
 	}
 	if rule.UntilAt != nil && rule.UntilDate != nil {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence", Message: "use untilAt or untilDate, not both"})
@@ -1223,14 +1549,63 @@ func validateRecurrence(rule *domain.RecurrenceRule, timed bool) []FieldError {
 	if len(rule.ByWeekday) > 0 && rule.Frequency != domain.RecurrenceFrequencyWeekly {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byWeekday", Message: "byWeekday is only supported for weekly recurrence"})
 	}
+	for _, weekday := range rule.ByWeekday {
+		if !validWeekday(weekday) {
+			fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byWeekday", Message: "byWeekday values must be MO, TU, WE, TH, FR, SA, or SU"})
+			break
+		}
+	}
+	if hasDuplicateWeekdays(rule.ByWeekday) {
+		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byWeekday", Message: "byWeekday cannot contain duplicates"})
+	}
 	if len(rule.ByMonthDay) > 0 && rule.Frequency != domain.RecurrenceFrequencyMonthly {
 		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byMonthDay", Message: "byMonthDay is only supported for monthly recurrence"})
+	}
+	for _, monthDay := range rule.ByMonthDay {
+		if monthDay < 1 || monthDay > 31 {
+			fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byMonthDay", Message: "byMonthDay values must be between 1 and 31"})
+			break
+		}
+	}
+	if hasDuplicateMonthDays(rule.ByMonthDay) {
+		fieldErrors = append(fieldErrors, FieldError{Field: "recurrence.byMonthDay", Message: "byMonthDay cannot contain duplicates"})
 	}
 	if timed && rule.UntilDate == nil && rule.UntilAt == nil && rule.Count == nil {
 		return fieldErrors
 	}
 
 	return fieldErrors
+}
+
+func validWeekday(value domain.Weekday) bool {
+	switch value {
+	case domain.WeekdayMonday, domain.WeekdayTuesday, domain.WeekdayWednesday, domain.WeekdayThursday, domain.WeekdayFriday, domain.WeekdaySaturday, domain.WeekdaySunday:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasDuplicateWeekdays(values []domain.Weekday) bool {
+	seen := map[domain.Weekday]bool{}
+	for _, value := range values {
+		if seen[value] {
+			return true
+		}
+		seen[value] = true
+	}
+	return false
+}
+
+func hasDuplicateMonthDays(values []int32) bool {
+	seen := map[int32]bool{}
+	for _, value := range values {
+		if seen[value] {
+			return true
+		}
+		seen[value] = true
+	}
+	return false
 }
 
 func validateResourceID(field, value string) error {
@@ -1400,7 +1775,7 @@ func paginatePendingReminders(items []domain.PendingReminder, params domain.Remi
 	return page, nil
 }
 
-func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.AgendaItem {
+func agendaItemsForEvent(event domain.Event, states map[string]domain.OccurrenceState, from, to time.Time) []domain.AgendaItem {
 	items := []domain.AgendaItem{}
 
 	switch {
@@ -1418,6 +1793,10 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 		}
 
 		for _, occurrence := range occurrences {
+			key := occurrenceKey(event.ID, &occurrence, nil)
+			if suppressBaseOccurrence(states, key) {
+				continue
+			}
 			endAt := occurrence
 			if event.EndAt != nil {
 				endAt = occurrence.Add(duration)
@@ -1428,7 +1807,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 
 			item := domain.AgendaItem{
 				Kind:          domain.AgendaItemKindEvent,
-				OccurrenceKey: occurrenceKey(event.ID, &occurrence, nil),
+				OccurrenceKey: key,
 				CalendarID:    event.CalendarID,
 				SourceID:      event.ID,
 				Title:         event.Title,
@@ -1443,6 +1822,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 			}
 			items = append(items, item)
 		}
+		items = append(items, rescheduledTimedEventAgendaItems(event, states, duration, from, to)...)
 	case event.StartDate != nil:
 		spanDays := 1
 		if event.EndDate != nil {
@@ -1457,6 +1837,10 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 		}
 
 		for _, occurrence := range occurrences {
+			key := occurrenceKey(event.ID, nil, &occurrence)
+			if suppressBaseOccurrence(states, key) {
+				continue
+			}
 			startDate := occurrence
 			endDate := startDate
 			if spanDays > 1 {
@@ -1469,7 +1853,7 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 
 			item := domain.AgendaItem{
 				Kind:          domain.AgendaItemKindEvent,
-				OccurrenceKey: occurrenceKey(event.ID, nil, &startDate),
+				OccurrenceKey: key,
 				CalendarID:    event.CalendarID,
 				SourceID:      event.ID,
 				Title:         event.Title,
@@ -1484,12 +1868,13 @@ func agendaItemsForEvent(event domain.Event, from, to time.Time) []domain.Agenda
 			}
 			items = append(items, item)
 		}
+		items = append(items, rescheduledDateEventAgendaItems(event, states, spanDays, from, to)...)
 	}
 
 	return items
 }
 
-func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskCompletion, from, to time.Time) []domain.AgendaItem {
+func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskCompletion, states map[string]domain.OccurrenceState, from, to time.Time) []domain.AgendaItem {
 	items := []domain.AgendaItem{}
 
 	switch {
@@ -1502,11 +1887,14 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 		}
 
 		for _, occurrence := range occurrences {
+			key := occurrenceKey(task.ID, &occurrence, nil)
+			if suppressBaseOccurrence(states, key) {
+				continue
+			}
 			if occurrence.Before(from) || !occurrence.Before(to) {
 				continue
 			}
 
-			key := occurrenceKey(task.ID, &occurrence, nil)
 			item := domain.AgendaItem{
 				Kind:           domain.AgendaItemKindTask,
 				OccurrenceKey:  key,
@@ -1527,6 +1915,7 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 			}
 			items = append(items, item)
 		}
+		items = append(items, rescheduledTimedTaskAgendaItems(task, completions, states, from, to)...)
 	case task.DueDate != nil:
 		var occurrences []string
 		if task.Recurrence != nil {
@@ -1536,11 +1925,14 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 		}
 
 		for _, occurrence := range occurrences {
+			key := occurrenceKey(task.ID, nil, &occurrence)
+			if suppressBaseOccurrence(states, key) {
+				continue
+			}
 			if !occursInDateRange(occurrence, occurrence, from, to) {
 				continue
 			}
 
-			key := occurrenceKey(task.ID, nil, &occurrence)
 			item := domain.AgendaItem{
 				Kind:           domain.AgendaItemKindTask,
 				OccurrenceKey:  key,
@@ -1561,12 +1953,194 @@ func agendaItemsForTask(task domain.Task, completions map[string]domain.TaskComp
 			}
 			items = append(items, item)
 		}
+		items = append(items, rescheduledDateTaskAgendaItems(task, completions, states, from, to)...)
 	}
 
 	return items
 }
 
-func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
+func suppressBaseOccurrence(states map[string]domain.OccurrenceState, key string) bool {
+	state, ok := states[key]
+	return ok && (state.Cancelled || occurrenceStateHasReplacement(state))
+}
+
+func occurrenceStateHasReplacement(state domain.OccurrenceState) bool {
+	return state.ReplacementAt != nil || state.ReplacementDate != nil
+}
+
+func eventOccurrenceStateMatchesSchedule(event domain.Event, state domain.OccurrenceState) bool {
+	if event.Recurrence == nil {
+		return false
+	}
+
+	switch {
+	case event.StartAt != nil:
+		return state.OccurrenceAt != nil &&
+			state.OccurrenceDate == nil &&
+			recurrence.IncludesTimed(*event.StartAt, event.Recurrence, *state.OccurrenceAt)
+	case event.StartDate != nil:
+		return state.OccurrenceDate != nil &&
+			state.OccurrenceAt == nil &&
+			recurrence.IncludesDate(*event.StartDate, event.Recurrence, *state.OccurrenceDate)
+	default:
+		return false
+	}
+}
+
+func taskOccurrenceStateMatchesSchedule(task domain.Task, state domain.OccurrenceState) bool {
+	if task.Recurrence == nil {
+		return false
+	}
+
+	switch {
+	case task.DueAt != nil:
+		return state.OccurrenceAt != nil &&
+			state.OccurrenceDate == nil &&
+			recurrence.IncludesTimed(*task.DueAt, task.Recurrence, *state.OccurrenceAt)
+	case task.DueDate != nil:
+		return state.OccurrenceDate != nil &&
+			state.OccurrenceAt == nil &&
+			recurrence.IncludesDate(*task.DueDate, task.Recurrence, *state.OccurrenceDate)
+	default:
+		return false
+	}
+}
+
+func rescheduledTimedEventAgendaItems(event domain.Event, states map[string]domain.OccurrenceState, duration time.Duration, from, to time.Time) []domain.AgendaItem {
+	items := []domain.AgendaItem{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementAt == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
+			continue
+		}
+		startAt := *state.ReplacementAt
+		endAt := startAt
+		if state.ReplacementEndAt != nil {
+			endAt = *state.ReplacementEndAt
+		} else if event.EndAt != nil {
+			endAt = startAt.Add(duration)
+		}
+		if !occursInTimedRange(startAt, endAt, from, to) {
+			continue
+		}
+		item := domain.AgendaItem{
+			Kind:          domain.AgendaItemKindEvent,
+			OccurrenceKey: state.OccurrenceKey,
+			CalendarID:    event.CalendarID,
+			SourceID:      event.ID,
+			Title:         event.Title,
+			Description:   cloneStringPtr(event.Description),
+			StartAt:       cloneTimePtr(&startAt),
+			EndAt:         cloneTimePtr(&endAt),
+			Attendees:     cloneEventAttendees(event.Attendees),
+			LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
+		}
+		if event.EndAt == nil && state.ReplacementEndAt == nil {
+			item.EndAt = nil
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func rescheduledDateEventAgendaItems(event domain.Event, states map[string]domain.OccurrenceState, spanDays int, from, to time.Time) []domain.AgendaItem {
+	items := []domain.AgendaItem{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementDate == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
+			continue
+		}
+		startDate := *state.ReplacementDate
+		endDate := startDate
+		if state.ReplacementEndDate != nil {
+			endDate = *state.ReplacementEndDate
+		} else if spanDays > 1 {
+			endDate = dateAddDays(startDate, spanDays-1)
+		}
+		if !occursInDateRange(startDate, endDate, from, to) {
+			continue
+		}
+		item := domain.AgendaItem{
+			Kind:          domain.AgendaItemKindEvent,
+			OccurrenceKey: state.OccurrenceKey,
+			CalendarID:    event.CalendarID,
+			SourceID:      event.ID,
+			Title:         event.Title,
+			Description:   cloneStringPtr(event.Description),
+			StartDate:     &startDate,
+			EndDate:       &endDate,
+			Attendees:     cloneEventAttendees(event.Attendees),
+			LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
+		}
+		if spanDays == 1 && state.ReplacementEndDate == nil {
+			item.EndDate = nil
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func rescheduledTimedTaskAgendaItems(task domain.Task, completions map[string]domain.TaskCompletion, states map[string]domain.OccurrenceState, from, to time.Time) []domain.AgendaItem {
+	items := []domain.AgendaItem{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementAt == nil || !taskOccurrenceStateMatchesSchedule(task, state) {
+			continue
+		}
+		dueAt := *state.ReplacementAt
+		if dueAt.Before(from) || !dueAt.Before(to) {
+			continue
+		}
+		item := domain.AgendaItem{
+			Kind:           domain.AgendaItemKindTask,
+			OccurrenceKey:  state.OccurrenceKey,
+			CalendarID:     task.CalendarID,
+			SourceID:       task.ID,
+			Title:          task.Title,
+			Description:    cloneStringPtr(task.Description),
+			DueAt:          cloneTimePtr(&dueAt),
+			Priority:       task.Priority,
+			Status:         task.Status,
+			Tags:           slices.Clone(task.Tags),
+			LinkedEventIDs: slices.Clone(task.LinkedEventIDs),
+		}
+		if completion, ok := completions[state.OccurrenceKey]; ok {
+			item.CompletedAt = cloneTimePtr(&completion.CompletedAt)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func rescheduledDateTaskAgendaItems(task domain.Task, completions map[string]domain.TaskCompletion, states map[string]domain.OccurrenceState, from, to time.Time) []domain.AgendaItem {
+	items := []domain.AgendaItem{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementDate == nil || !taskOccurrenceStateMatchesSchedule(task, state) {
+			continue
+		}
+		dueDate := *state.ReplacementDate
+		if !occursInDateRange(dueDate, dueDate, from, to) {
+			continue
+		}
+		item := domain.AgendaItem{
+			Kind:           domain.AgendaItemKindTask,
+			OccurrenceKey:  state.OccurrenceKey,
+			CalendarID:     task.CalendarID,
+			SourceID:       task.ID,
+			Title:          task.Title,
+			Description:    cloneStringPtr(task.Description),
+			DueDate:        &dueDate,
+			Priority:       task.Priority,
+			Status:         task.Status,
+			Tags:           slices.Clone(task.Tags),
+			LinkedEventIDs: slices.Clone(task.LinkedEventIDs),
+		}
+		if completion, ok := completions[state.OccurrenceKey]; ok {
+			item.CompletedAt = cloneTimePtr(&completion.CompletedAt)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func pendingRemindersForEvent(event domain.Event, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
 	items := []domain.PendingReminder{}
 	if len(event.Reminders) == 0 {
 		return items
@@ -1587,11 +2161,14 @@ func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[stri
 				occurrences = []time.Time{*event.StartAt}
 			}
 			for _, occurrence := range occurrences {
+				key := occurrenceKey(event.ID, &occurrence, nil)
+				if suppressBaseOccurrence(states, key) {
+					continue
+				}
 				remindAt := occurrence.Add(-offset)
 				if remindAt.Before(from) || !remindAt.Before(to) {
 					continue
 				}
-				key := occurrenceKey(event.ID, &occurrence, nil)
 				if reminderDismissed(dismissals, reminder.ID, key) {
 					continue
 				}
@@ -1616,6 +2193,7 @@ func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[stri
 				}
 				items = append(items, item)
 			}
+			items = append(items, rescheduledTimedEventPendingReminders(event, states, dismissals, reminder, offset, duration, from, to)...)
 		}
 	case event.StartDate != nil:
 		spanDays := 1
@@ -1631,11 +2209,14 @@ func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[stri
 				occurrences = []string{*event.StartDate}
 			}
 			for _, occurrence := range occurrences {
+				key := occurrenceKey(event.ID, nil, &occurrence)
+				if suppressBaseOccurrence(states, key) {
+					continue
+				}
 				remindAt := mustParseDate(occurrence).Add(-offset)
 				if remindAt.Before(from) || !remindAt.Before(to) {
 					continue
 				}
-				key := occurrenceKey(event.ID, nil, &occurrence)
 				if reminderDismissed(dismissals, reminder.ID, key) {
 					continue
 				}
@@ -1660,13 +2241,14 @@ func pendingRemindersForEvent(event domain.Event, dismissals map[string]map[stri
 				}
 				items = append(items, item)
 			}
+			items = append(items, rescheduledDateEventPendingReminders(event, states, dismissals, reminder, offset, spanDays, from, to)...)
 		}
 	}
 
 	return items
 }
 
-func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
+func pendingRemindersForTask(task domain.Task, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, from, to time.Time) []domain.PendingReminder {
 	items := []domain.PendingReminder{}
 	if len(task.Reminders) == 0 {
 		return items
@@ -1683,11 +2265,14 @@ func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]
 				occurrences = []time.Time{*task.DueAt}
 			}
 			for _, occurrence := range occurrences {
+				key := occurrenceKey(task.ID, &occurrence, nil)
+				if suppressBaseOccurrence(states, key) {
+					continue
+				}
 				remindAt := occurrence.Add(-offset)
 				if remindAt.Before(from) || !remindAt.Before(to) {
 					continue
 				}
-				key := occurrenceKey(task.ID, &occurrence, nil)
 				if reminderDismissed(dismissals, reminder.ID, key) {
 					continue
 				}
@@ -1704,6 +2289,7 @@ func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]
 					DueAt:         cloneTimePtr(&occurrence),
 				})
 			}
+			items = append(items, rescheduledTimedTaskPendingReminders(task, states, dismissals, reminder, offset, from, to)...)
 		}
 	case task.DueDate != nil:
 		for _, reminder := range task.Reminders {
@@ -1715,11 +2301,14 @@ func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]
 				occurrences = []string{*task.DueDate}
 			}
 			for _, occurrence := range occurrences {
+				key := occurrenceKey(task.ID, nil, &occurrence)
+				if suppressBaseOccurrence(states, key) {
+					continue
+				}
 				remindAt := mustParseDate(occurrence).Add(-offset)
 				if remindAt.Before(from) || !remindAt.Before(to) {
 					continue
 				}
-				key := occurrenceKey(task.ID, nil, &occurrence)
 				if reminderDismissed(dismissals, reminder.ID, key) {
 					continue
 				}
@@ -1736,9 +2325,138 @@ func pendingRemindersForTask(task domain.Task, dismissals map[string]map[string]
 					DueDate:       &occurrence,
 				})
 			}
+			items = append(items, rescheduledDateTaskPendingReminders(task, states, dismissals, reminder, offset, from, to)...)
 		}
 	}
 
+	return items
+}
+
+func rescheduledTimedEventPendingReminders(event domain.Event, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, reminder domain.ReminderRule, offset time.Duration, duration time.Duration, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementAt == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
+			continue
+		}
+		occurrence := *state.ReplacementAt
+		remindAt := occurrence.Add(-offset)
+		if remindAt.Before(from) || !remindAt.Before(to) || reminderDismissed(dismissals, reminder.ID, state.OccurrenceKey) {
+			continue
+		}
+		endAt := occurrence
+		if state.ReplacementEndAt != nil {
+			endAt = *state.ReplacementEndAt
+		} else if event.EndAt != nil {
+			endAt = occurrence.Add(duration)
+		}
+		item := domain.PendingReminder{
+			ID:            reminderOccurrenceID(reminder.ID, state.OccurrenceKey),
+			ReminderID:    reminder.ID,
+			OwnerKind:     domain.ReminderOwnerKindEvent,
+			OwnerID:       event.ID,
+			CalendarID:    event.CalendarID,
+			Title:         event.Title,
+			OccurrenceKey: state.OccurrenceKey,
+			RemindAt:      remindAt,
+			BeforeMinutes: reminder.BeforeMinutes,
+			StartAt:       cloneTimePtr(&occurrence),
+		}
+		if event.EndAt != nil || state.ReplacementEndAt != nil {
+			item.EndAt = cloneTimePtr(&endAt)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func rescheduledDateEventPendingReminders(event domain.Event, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, reminder domain.ReminderRule, offset time.Duration, spanDays int, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementDate == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
+			continue
+		}
+		occurrence := *state.ReplacementDate
+		remindAt := mustParseDate(occurrence).Add(-offset)
+		if remindAt.Before(from) || !remindAt.Before(to) || reminderDismissed(dismissals, reminder.ID, state.OccurrenceKey) {
+			continue
+		}
+		endDate := occurrence
+		if state.ReplacementEndDate != nil {
+			endDate = *state.ReplacementEndDate
+		} else if spanDays > 1 {
+			endDate = dateAddDays(occurrence, spanDays-1)
+		}
+		item := domain.PendingReminder{
+			ID:            reminderOccurrenceID(reminder.ID, state.OccurrenceKey),
+			ReminderID:    reminder.ID,
+			OwnerKind:     domain.ReminderOwnerKindEvent,
+			OwnerID:       event.ID,
+			CalendarID:    event.CalendarID,
+			Title:         event.Title,
+			OccurrenceKey: state.OccurrenceKey,
+			RemindAt:      remindAt,
+			BeforeMinutes: reminder.BeforeMinutes,
+			StartDate:     &occurrence,
+		}
+		if spanDays > 1 || state.ReplacementEndDate != nil {
+			item.EndDate = &endDate
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func rescheduledTimedTaskPendingReminders(task domain.Task, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, reminder domain.ReminderRule, offset time.Duration, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementAt == nil || !taskOccurrenceStateMatchesSchedule(task, state) {
+			continue
+		}
+		occurrence := *state.ReplacementAt
+		remindAt := occurrence.Add(-offset)
+		if remindAt.Before(from) || !remindAt.Before(to) || reminderDismissed(dismissals, reminder.ID, state.OccurrenceKey) {
+			continue
+		}
+		items = append(items, domain.PendingReminder{
+			ID:            reminderOccurrenceID(reminder.ID, state.OccurrenceKey),
+			ReminderID:    reminder.ID,
+			OwnerKind:     domain.ReminderOwnerKindTask,
+			OwnerID:       task.ID,
+			CalendarID:    task.CalendarID,
+			Title:         task.Title,
+			OccurrenceKey: state.OccurrenceKey,
+			RemindAt:      remindAt,
+			BeforeMinutes: reminder.BeforeMinutes,
+			DueAt:         cloneTimePtr(&occurrence),
+		})
+	}
+	return items
+}
+
+func rescheduledDateTaskPendingReminders(task domain.Task, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, reminder domain.ReminderRule, offset time.Duration, from, to time.Time) []domain.PendingReminder {
+	items := []domain.PendingReminder{}
+	for _, state := range states {
+		if state.Cancelled || state.ReplacementDate == nil || !taskOccurrenceStateMatchesSchedule(task, state) {
+			continue
+		}
+		occurrence := *state.ReplacementDate
+		remindAt := mustParseDate(occurrence).Add(-offset)
+		if remindAt.Before(from) || !remindAt.Before(to) || reminderDismissed(dismissals, reminder.ID, state.OccurrenceKey) {
+			continue
+		}
+		items = append(items, domain.PendingReminder{
+			ID:            reminderOccurrenceID(reminder.ID, state.OccurrenceKey),
+			ReminderID:    reminder.ID,
+			OwnerKind:     domain.ReminderOwnerKindTask,
+			OwnerID:       task.ID,
+			CalendarID:    task.CalendarID,
+			Title:         task.Title,
+			OccurrenceKey: state.OccurrenceKey,
+			RemindAt:      remindAt,
+			BeforeMinutes: reminder.BeforeMinutes,
+			DueDate:       &occurrence,
+		})
+	}
 	return items
 }
 
@@ -1827,6 +2545,24 @@ func occurrenceKey(id string, at *time.Time, date *string) string {
 	}
 
 	return id + "@single"
+}
+
+func parseOccurrenceKey(id string, key string) (*time.Time, *string, error) {
+	prefix := id + "@"
+	if !strings.HasPrefix(key, prefix) {
+		return nil, nil, fmt.Errorf("occurrence key owner mismatch")
+	}
+	value := strings.TrimPrefix(key, prefix)
+	if value == "" || value == "single" {
+		return nil, nil, fmt.Errorf("occurrence key has no recurring selector")
+	}
+	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return &at, nil, nil
+	}
+	if _, err := time.Parse(time.DateOnly, value); err == nil {
+		return nil, &value, nil
+	}
+	return nil, nil, fmt.Errorf("occurrence key selector is invalid")
 }
 
 func reminderOccurrenceID(reminderID string, occurrenceKey string) string {

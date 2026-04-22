@@ -35,6 +35,10 @@ Supported routine actions are:
 - `create_event_task_link`
 - `delete_event_task_link`
 - `list_event_task_links`
+- `cancel_event_occurrence`
+- `reschedule_event_occurrence`
+- `cancel_task_occurrence`
+- `reschedule_task_occurrence`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -148,6 +152,8 @@ Events:
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","start_at":null,"end_at":null,"start_date":"2026-04-17"}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","reminders":null}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","attendees":null}
+{"action":"cancel_event_occurrence","event_id":"<id-from-prior-runner-result>","occurrence_at":"2026-04-17T09:00:00Z"}
+{"action":"reschedule_event_occurrence","event_id":"<id-from-prior-runner-result>","occurrence_at":"2026-04-18T09:00:00Z","start_at":"2026-04-19T11:00:00Z"}
 {"action":"delete_event","event_id":"<id-from-prior-runner-result>"}
 ```
 
@@ -165,6 +171,9 @@ Tasks:
 {"action":"update_task","task_id":"<id-from-prior-runner-result>","reminders":null}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>"}
 {"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
+{"action":"complete_task","task_id":"<id-from-prior-runner-result>","occurrence_key":"<occurrence-key-from-agenda>"}
+{"action":"cancel_task_occurrence","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-17"}
+{"action":"reschedule_task_occurrence","task_id":"<id-from-prior-runner-result>","occurrence_date":"2026-04-18","due_date":"2026-04-19"}
 {"action":"delete_task","task_id":"<id-from-prior-runner-result>"}
 ```
 

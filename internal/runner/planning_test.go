@@ -129,6 +129,115 @@ func TestRunPlanningTaskCreateAndListAgenda(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskOccurrenceActionsAndCompletionKey(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	count := int32(3)
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Standup",
+		StartAt:      "2026-04-16T09:00:00Z",
+		EndAt:        "2026-04-16T09:30:00Z",
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work",
+		Title:        "Review",
+		DueDate:      "2026-04-16",
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	canceledEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCancelEventOccurrence,
+		EventID:      event.Events[0].ID,
+		OccurrenceAt: "2026-04-17T09:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("cancel event occurrence: %v", err)
+	}
+	if canceledEvent.Rejected || canceledEvent.Writes[0].OccurrenceKey == "" || canceledEvent.Writes[0].Status != "canceled" {
+		t.Fatalf("canceled event result = %#v", canceledEvent)
+	}
+	movedEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionRescheduleEventOccurrence,
+		EventID:      event.Events[0].ID,
+		OccurrenceAt: "2026-04-18T09:00:00Z",
+		StartAt:      "2026-04-19T11:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("reschedule event occurrence: %v", err)
+	}
+	if movedEvent.Rejected || movedEvent.Writes[0].OccurrenceKey == "" || movedEvent.Writes[0].Status != "rescheduled" {
+		t.Fatalf("moved event result = %#v", movedEvent)
+	}
+
+	canceledTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:         PlanningTaskActionCancelTaskOccurrence,
+		TaskID:         task.Tasks[0].ID,
+		OccurrenceDate: "2026-04-17",
+	})
+	if err != nil {
+		t.Fatalf("cancel task occurrence: %v", err)
+	}
+	if canceledTask.Rejected || canceledTask.Writes[0].OccurrenceKey == "" {
+		t.Fatalf("canceled task result = %#v", canceledTask)
+	}
+	movedTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:         PlanningTaskActionRescheduleTaskOccurrence,
+		TaskID:         task.Tasks[0].ID,
+		OccurrenceDate: "2026-04-18",
+		DueDate:        "2026-04-19",
+	})
+	if err != nil {
+		t.Fatalf("reschedule task occurrence: %v", err)
+	}
+	if movedTask.Rejected || movedTask.Writes[0].OccurrenceKey == "" {
+		t.Fatalf("moved task result = %#v", movedTask)
+	}
+	completed, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:        PlanningTaskActionCompleteTask,
+		TaskID:        task.Tasks[0].ID,
+		OccurrenceKey: movedTask.Writes[0].OccurrenceKey,
+	})
+	if err != nil {
+		t.Fatalf("complete by occurrence key: %v", err)
+	}
+	if completed.Rejected || completed.Writes[0].OccurrenceKey != movedTask.Writes[0].OccurrenceKey {
+		t.Fatalf("completion result = %#v, want stable occurrence key", completed)
+	}
+
+	limit := 10
+	agenda, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListAgenda,
+		From:   "2026-04-16T00:00:00Z",
+		To:     "2026-04-20T00:00:00Z",
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("list agenda: %v", err)
+	}
+	if agenda.Rejected || len(agenda.Agenda) != 4 {
+		t.Fatalf("agenda = %#v, want first and moved event/task occurrences", agenda)
+	}
+	if agenda.Agenda[2].DueDate != "2026-04-19" || agenda.Agenda[2].OccurrenceKey != movedTask.Writes[0].OccurrenceKey || agenda.Agenda[2].CompletedAt == "" {
+		t.Fatalf("moved task agenda item = %#v", agenda.Agenda[2])
+	}
+	if agenda.Agenda[3].StartAt != "2026-04-19T11:00:00Z" || agenda.Agenda[3].OccurrenceKey != movedEvent.Writes[0].OccurrenceKey {
+		t.Fatalf("moved event agenda item = %#v", agenda.Agenda[3])
+	}
+}
+
 func TestRunPlanningTaskAllDayEventAndListFiltering(t *testing.T) {
 	t.Parallel()
 
@@ -1460,6 +1569,34 @@ func TestRunPlanningTaskValidationRejectionsBeforeDatabaseCreation(t *testing.T)
 			},
 		},
 		{
+			name: "duplicate recurrence weekday",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionCreateTask,
+				CalendarName: "Work",
+				Title:        "Review",
+				DueDate:      "2026-04-16",
+				Recurrence:   &RecurrenceRuleRequest{Frequency: "weekly", ByWeekday: []string{"MO", "MO"}},
+			},
+		},
+		{
+			name: "count with until recurrence",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionCreateTask,
+				CalendarName: "Work",
+				Title:        "Review",
+				DueDate:      "2026-04-16",
+				Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: int32Ptr(2), UntilDate: "2026-04-20"},
+			},
+		},
+		{
+			name: "occurrence action missing selector",
+			request: PlanningTaskRequest{
+				Action:  PlanningTaskActionCancelTaskOccurrence,
+				TaskID:  "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+				DueDate: "2026-04-18",
+			},
+		},
+		{
 			name: "non-positive limit",
 			request: PlanningTaskRequest{
 				Action: PlanningTaskActionListTasks,
@@ -1490,6 +1627,10 @@ func testOptions(t *testing.T) Options {
 }
 
 func intPtr(value int) *int {
+	return &value
+}
+
+func int32Ptr(value int32) *int32 {
 	return &value
 }
 

@@ -433,6 +433,254 @@ func TestCompleteRecurringTaskPerOccurrence(t *testing.T) {
 	}
 }
 
+func TestRecurringEventOccurrenceCancellationAndRescheduleAffectAgenda(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(30 * time.Minute)
+	count := int32(3)
+
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Standup",
+		StartAt:    &startAt,
+		EndAt:      &endAt,
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	_, err = svc.CancelEventOccurrence(event.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt: timePtr(time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("CancelEventOccurrence(): %v", err)
+	}
+	moved, err := svc.RescheduleEventOccurrence(event.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:  timePtr(time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC)),
+		ReplacementAt: timePtr(time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleEventOccurrence(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want original and moved occurrence", page.Items)
+	}
+	if page.Items[0].StartAt == nil || page.Items[0].StartAt.Format(time.RFC3339) != "2026-04-16T09:00:00Z" {
+		t.Fatalf("first item = %#v, want original first occurrence", page.Items[0])
+	}
+	if page.Items[1].OccurrenceKey != moved.OccurrenceKey || page.Items[1].StartAt == nil || page.Items[1].StartAt.Format(time.RFC3339) != "2026-04-19T11:00:00Z" {
+		t.Fatalf("moved item = %#v, want stable key %q at replacement time", page.Items[1], moved.OccurrenceKey)
+	}
+}
+
+func TestRecurringTaskOccurrenceStateAndCompletionByKey(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	count := int32(3)
+
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Review",
+		DueDate:    stringPtr("2026-04-16"),
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+
+	_, err = svc.CancelTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceDate: stringPtr("2026-04-17"),
+	})
+	if err != nil {
+		t.Fatalf("CancelTaskOccurrence(): %v", err)
+	}
+	_, err = svc.CompleteTask(task.ID, domain.TaskCompletionRequest{OccurrenceDate: stringPtr("2026-04-17")})
+	if err == nil {
+		t.Fatal("CompleteTask(canceled) error = nil, want conflict")
+	}
+	var conflictErr *service.ConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("CompleteTask(canceled) error = %T, want ConflictError", err)
+	}
+
+	moved, err := svc.RescheduleTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceDate:  stringPtr("2026-04-18"),
+		ReplacementDate: stringPtr("2026-04-19"),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleTaskOccurrence(): %v", err)
+	}
+	completion, err := svc.CompleteTask(task.ID, domain.TaskCompletionRequest{OccurrenceKey: moved.OccurrenceKey})
+	if err != nil {
+		t.Fatalf("CompleteTask(occurrence key): %v", err)
+	}
+	if completion.OccurrenceKey != moved.OccurrenceKey || completion.OccurrenceDate == nil || *completion.OccurrenceDate != "2026-04-18" {
+		t.Fatalf("completion = %#v, want stable original occurrence key/date", completion)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want first and moved task occurrences", page.Items)
+	}
+	if page.Items[1].OccurrenceKey != moved.OccurrenceKey || page.Items[1].DueDate == nil || *page.Items[1].DueDate != "2026-04-19" || page.Items[1].CompletedAt == nil {
+		t.Fatalf("moved agenda item = %#v, want replacement date with completion", page.Items[1])
+	}
+}
+
+func TestRescheduledEventOccurrenceIgnoredAfterRecurrenceUpdate(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	count := int32(3)
+
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Standup",
+		StartAt:    &startAt,
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	moved, err := svc.RescheduleEventOccurrence(event.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:  timePtr(time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC)),
+		ReplacementAt: timePtr(time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleEventOccurrence(): %v", err)
+	}
+
+	reducedCount := int32(2)
+	_, err = svc.UpdateEvent(event.ID, domain.EventPatch{
+		Recurrence: domain.SetPatch(domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &reducedCount,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("UpdateEvent(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want only current scheduled occurrences", page.Items)
+	}
+	for _, item := range page.Items {
+		if item.OccurrenceKey == moved.OccurrenceKey {
+			t.Fatalf("agenda item = %#v, want stale moved occurrence omitted", item)
+		}
+	}
+}
+
+func TestRescheduledTaskOccurrenceIgnoredAfterRecurrenceUpdate(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	count := int32(3)
+
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Review",
+		DueDate:    stringPtr("2026-04-16"),
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &count,
+		},
+		Reminders: []domain.ReminderRule{{BeforeMinutes: 60}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+	moved, err := svc.RescheduleTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceDate:  stringPtr("2026-04-18"),
+		ReplacementDate: stringPtr("2026-04-20"),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleTaskOccurrence(): %v", err)
+	}
+
+	reducedCount := int32(2)
+	_, err = svc.UpdateTask(task.ID, domain.TaskPatch{
+		Recurrence: domain.SetPatch(domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyDaily,
+			Count:     &reducedCount,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want only current scheduled occurrences", page.Items)
+	}
+	for _, item := range page.Items {
+		if item.OccurrenceKey == moved.OccurrenceKey {
+			t.Fatalf("agenda item = %#v, want stale moved occurrence omitted", item)
+		}
+	}
+
+	reminders, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:  time.Date(2026, 4, 19, 22, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 20, 1, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(): %v", err)
+	}
+	if len(reminders.Items) != 0 {
+		t.Fatalf("pending reminders = %#v, want stale moved reminder omitted", reminders.Items)
+	}
+}
+
 func TestRecurringTimedUntilDateStopsAtEndOfDay(t *testing.T) {
 	t.Parallel()
 
@@ -950,6 +1198,44 @@ func TestReminderPendingQueriesAndDismissal(t *testing.T) {
 	}
 	if len(afterDismiss.Items) != 3 || afterDismiss.Items[0].Title == "Medicine" {
 		t.Fatalf("after dismiss = %#v, want dismissed occurrence omitted", afterDismiss.Items)
+	}
+}
+
+func TestPendingRemindersUseOccurrenceState(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	dueAt := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+
+	task, err := svc.CreateTask(domain.Task{
+		CalendarID: calendar.ID,
+		Title:      "Daily review",
+		DueAt:      &dueAt,
+		Recurrence: &domain.RecurrenceRule{Frequency: domain.RecurrenceFrequencyDaily, Count: int32Ptr(2)},
+		Reminders:  []domain.ReminderRule{{BeforeMinutes: 15}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+	moved, err := svc.RescheduleTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:  timePtr(time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)),
+		ReplacementAt: timePtr(time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleTaskOccurrence(): %v", err)
+	}
+
+	page, err := svc.ListPendingReminders(domain.ReminderQueryParams{
+		From:  time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListPendingReminders(): %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].OccurrenceKey != moved.OccurrenceKey || !page.Items[0].RemindAt.Equal(time.Date(2026, 4, 18, 8, 45, 0, 0, time.UTC)) {
+		t.Fatalf("pending reminders = %#v, want moved reminder with stable key", page.Items)
 	}
 }
 

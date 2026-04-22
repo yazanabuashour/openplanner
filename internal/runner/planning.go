@@ -20,25 +20,29 @@ import (
 )
 
 const (
-	PlanningTaskActionEnsureCalendar      = "ensure_calendar"
-	PlanningTaskActionCreateEvent         = "create_event"
-	PlanningTaskActionCreateTask          = "create_task"
-	PlanningTaskActionUpdateCalendar      = "update_calendar"
-	PlanningTaskActionUpdateEvent         = "update_event"
-	PlanningTaskActionUpdateTask          = "update_task"
-	PlanningTaskActionDeleteCalendar      = "delete_calendar"
-	PlanningTaskActionDeleteEvent         = "delete_event"
-	PlanningTaskActionDeleteTask          = "delete_task"
-	PlanningTaskActionCreateEventTaskLink = "create_event_task_link"
-	PlanningTaskActionDeleteEventTaskLink = "delete_event_task_link"
-	PlanningTaskActionListEventTaskLinks  = "list_event_task_links"
-	PlanningTaskActionListAgenda          = "list_agenda"
-	PlanningTaskActionListEvents          = "list_events"
-	PlanningTaskActionListTasks           = "list_tasks"
-	PlanningTaskActionCompleteTask        = "complete_task"
-	PlanningTaskActionListReminders       = "list_pending_reminders"
-	PlanningTaskActionDismissReminder     = "dismiss_reminder"
-	PlanningTaskActionValidate            = "validate"
+	PlanningTaskActionEnsureCalendar            = "ensure_calendar"
+	PlanningTaskActionCreateEvent               = "create_event"
+	PlanningTaskActionCreateTask                = "create_task"
+	PlanningTaskActionUpdateCalendar            = "update_calendar"
+	PlanningTaskActionUpdateEvent               = "update_event"
+	PlanningTaskActionUpdateTask                = "update_task"
+	PlanningTaskActionDeleteCalendar            = "delete_calendar"
+	PlanningTaskActionDeleteEvent               = "delete_event"
+	PlanningTaskActionDeleteTask                = "delete_task"
+	PlanningTaskActionCreateEventTaskLink       = "create_event_task_link"
+	PlanningTaskActionDeleteEventTaskLink       = "delete_event_task_link"
+	PlanningTaskActionListEventTaskLinks        = "list_event_task_links"
+	PlanningTaskActionCancelEventOccurrence     = "cancel_event_occurrence"
+	PlanningTaskActionRescheduleEventOccurrence = "reschedule_event_occurrence"
+	PlanningTaskActionCancelTaskOccurrence      = "cancel_task_occurrence"
+	PlanningTaskActionRescheduleTaskOccurrence  = "reschedule_task_occurrence"
+	PlanningTaskActionListAgenda                = "list_agenda"
+	PlanningTaskActionListEvents                = "list_events"
+	PlanningTaskActionListTasks                 = "list_tasks"
+	PlanningTaskActionCompleteTask              = "complete_task"
+	PlanningTaskActionListReminders             = "list_pending_reminders"
+	PlanningTaskActionDismissReminder           = "dismiss_reminder"
+	PlanningTaskActionValidate                  = "validate"
 )
 
 var (
@@ -70,6 +74,7 @@ type PlanningTaskRequest struct {
 	Tags                 []string               `json:"tags,omitempty"`
 	TaskID               string                 `json:"task_id,omitempty"`
 	ReminderOccurrenceID string                 `json:"reminder_occurrence_id,omitempty"`
+	OccurrenceKey        string                 `json:"occurrence_key,omitempty"`
 	OccurrenceAt         string                 `json:"occurrence_at,omitempty"`
 	OccurrenceDate       string                 `json:"occurrence_date,omitempty"`
 	From                 string                 `json:"from,omitempty"`
@@ -119,11 +124,12 @@ type PlanningTaskResult struct {
 }
 
 type PlanningWrite struct {
-	Kind   string `json:"kind"`
-	ID     string `json:"id,omitempty"`
-	Status string `json:"status"`
-	Name   string `json:"name,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Kind          string `json:"kind"`
+	ID            string `json:"id,omitempty"`
+	Status        string `json:"status"`
+	Name          string `json:"name,omitempty"`
+	Title         string `json:"title,omitempty"`
+	OccurrenceKey string `json:"occurrence_key,omitempty"`
 }
 
 type CalendarEntry struct {
@@ -252,6 +258,7 @@ type normalizedPlanningTaskRequest struct {
 	ReminderOptions      domain.ReminderQueryParams
 	TaskID               string
 	ReminderOccurrenceID string
+	OccurrenceMutation   domain.OccurrenceMutationRequest
 	Completion           domain.TaskCompletionRequest
 }
 
@@ -321,6 +328,7 @@ var knownPlanningTaskFields = map[string]bool{
 	"tags":                   true,
 	"task_id":                true,
 	"reminder_occurrence_id": true,
+	"occurrence_key":         true,
 	"occurrence_at":          true,
 	"occurrence_date":        true,
 	"from":                   true,
@@ -549,6 +557,14 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runDeleteEventTaskLink(ctx, api, request)
 	case PlanningTaskActionListEventTaskLinks:
 		return runListEventTaskLinks(ctx, api, request)
+	case PlanningTaskActionCancelEventOccurrence:
+		return runCancelEventOccurrence(ctx, api, request)
+	case PlanningTaskActionRescheduleEventOccurrence:
+		return runRescheduleEventOccurrence(ctx, api, request)
+	case PlanningTaskActionCancelTaskOccurrence:
+		return runCancelTaskOccurrence(ctx, api, request)
+	case PlanningTaskActionRescheduleTaskOccurrence:
+		return runRescheduleTaskOccurrence(ctx, api, request)
 	case PlanningTaskActionListAgenda:
 		return runListAgenda(ctx, api, request)
 	case PlanningTaskActionListEvents:
@@ -801,6 +817,50 @@ func runListEventTaskLinks(ctx context.Context, api *localRuntime, request norma
 	}, nil
 }
 
+func runCancelEventOccurrence(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	state, err := api.CancelEventOccurrence(ctx, request.EventID, request.OccurrenceMutation)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return occurrenceStateResult(state, "event_occurrence", "canceled", "canceled event occurrence"), nil
+}
+
+func runRescheduleEventOccurrence(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	state, err := api.RescheduleEventOccurrence(ctx, request.EventID, request.OccurrenceMutation)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return occurrenceStateResult(state, "event_occurrence", "rescheduled", "rescheduled event occurrence"), nil
+}
+
+func runCancelTaskOccurrence(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	state, err := api.CancelTaskOccurrence(ctx, request.TaskID, request.OccurrenceMutation)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return occurrenceStateResult(state, "task_occurrence", "canceled", "canceled task occurrence"), nil
+}
+
+func runRescheduleTaskOccurrence(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	state, err := api.RescheduleTaskOccurrence(ctx, request.TaskID, request.OccurrenceMutation)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	return occurrenceStateResult(state, "task_occurrence", "rescheduled", "rescheduled task occurrence"), nil
+}
+
+func occurrenceStateResult(state domain.OccurrenceState, kind string, status string, summary string) PlanningTaskResult {
+	return PlanningTaskResult{
+		Writes: []PlanningWrite{{
+			Kind:          kind,
+			ID:            state.OwnerID,
+			Status:        status,
+			OccurrenceKey: state.OccurrenceKey,
+		}},
+		Summary: summary,
+	}
+}
+
 func runListAgenda(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	page, err := api.ListAgenda(ctx, request.AgendaOptions)
 	if err != nil {
@@ -875,9 +935,10 @@ func runCompleteTask(ctx context.Context, api *localRuntime, request normalizedP
 	}
 	return PlanningTaskResult{
 		Writes: []PlanningWrite{{
-			Kind:   "task_completion",
-			ID:     completion.TaskID,
-			Status: "completed",
+			Kind:          "task_completion",
+			ID:            completion.TaskID,
+			Status:        "completed",
+			OccurrenceKey: completion.OccurrenceKey,
 		}},
 		Summary: "completed task",
 	}, nil
@@ -1091,6 +1152,66 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 			EventID: normalized.EventID,
 			TaskID:  normalized.TaskID,
 		}
+		return normalized, ""
+	case PlanningTaskActionCancelEventOccurrence:
+		eventID := strings.TrimSpace(request.EventID)
+		if eventID == "" {
+			return normalizedPlanningTaskRequest{}, "event_id is required"
+		}
+		if _, err := ulid.ParseStrict(eventID); err != nil {
+			return normalizedPlanningTaskRequest{}, "event_id must be a valid ULID"
+		}
+		mutation, rejection := normalizeOccurrenceMutationInput(request, false, true)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.EventID = eventID
+		normalized.OccurrenceMutation = mutation
+		return normalized, ""
+	case PlanningTaskActionRescheduleEventOccurrence:
+		eventID := strings.TrimSpace(request.EventID)
+		if eventID == "" {
+			return normalizedPlanningTaskRequest{}, "event_id is required"
+		}
+		if _, err := ulid.ParseStrict(eventID); err != nil {
+			return normalizedPlanningTaskRequest{}, "event_id must be a valid ULID"
+		}
+		mutation, rejection := normalizeOccurrenceMutationInput(request, true, true)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.EventID = eventID
+		normalized.OccurrenceMutation = mutation
+		return normalized, ""
+	case PlanningTaskActionCancelTaskOccurrence:
+		taskID := strings.TrimSpace(request.TaskID)
+		if taskID == "" {
+			return normalizedPlanningTaskRequest{}, "task_id is required"
+		}
+		if _, err := ulid.ParseStrict(taskID); err != nil {
+			return normalizedPlanningTaskRequest{}, "task_id must be a valid ULID"
+		}
+		mutation, rejection := normalizeOccurrenceMutationInput(request, false, false)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.TaskID = taskID
+		normalized.OccurrenceMutation = mutation
+		return normalized, ""
+	case PlanningTaskActionRescheduleTaskOccurrence:
+		taskID := strings.TrimSpace(request.TaskID)
+		if taskID == "" {
+			return normalizedPlanningTaskRequest{}, "task_id is required"
+		}
+		if _, err := ulid.ParseStrict(taskID); err != nil {
+			return normalizedPlanningTaskRequest{}, "task_id must be a valid ULID"
+		}
+		mutation, rejection := normalizeOccurrenceMutationInput(request, true, false)
+		if rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.TaskID = taskID
+		normalized.OccurrenceMutation = mutation
 		return normalized, ""
 	case PlanningTaskActionListAgenda:
 		from, rejection := parseRequiredTime("from", request.From)
@@ -1684,6 +1805,7 @@ func normalizeTaskInput(request PlanningTaskRequest) (domain.Task, string) {
 }
 
 func normalizeCompletionInput(request PlanningTaskRequest) (domain.TaskCompletionRequest, string) {
+	occurrenceKey := strings.TrimSpace(request.OccurrenceKey)
 	occurrenceAt, rejection := parseOptionalTime("occurrence_at", request.OccurrenceAt)
 	if rejection != "" {
 		return domain.TaskCompletionRequest{}, rejection
@@ -1695,7 +1817,107 @@ func normalizeCompletionInput(request PlanningTaskRequest) (domain.TaskCompletio
 	if occurrenceAt != nil && occurrenceDate != nil {
 		return domain.TaskCompletionRequest{}, "use occurrence_at or occurrence_date, not both"
 	}
-	return domain.TaskCompletionRequest{OccurrenceAt: occurrenceAt, OccurrenceDate: occurrenceDate}, ""
+	if occurrenceKey != "" && (occurrenceAt != nil || occurrenceDate != nil) {
+		return domain.TaskCompletionRequest{}, "use occurrence_key, occurrence_at, or occurrence_date, not more than one"
+	}
+	return domain.TaskCompletionRequest{OccurrenceKey: occurrenceKey, OccurrenceAt: occurrenceAt, OccurrenceDate: occurrenceDate}, ""
+}
+
+func normalizeOccurrenceMutationInput(request PlanningTaskRequest, requireReplacement bool, event bool) (domain.OccurrenceMutationRequest, string) {
+	occurrenceAt, rejection := parseOptionalTime("occurrence_at", request.OccurrenceAt)
+	if rejection != "" {
+		return domain.OccurrenceMutationRequest{}, rejection
+	}
+	occurrenceDate, rejection := parseOptionalDate("occurrence_date", request.OccurrenceDate)
+	if rejection != "" {
+		return domain.OccurrenceMutationRequest{}, rejection
+	}
+	if occurrenceAt == nil && occurrenceDate == nil {
+		return domain.OccurrenceMutationRequest{}, "occurrence_at or occurrence_date is required"
+	}
+	if occurrenceAt != nil && occurrenceDate != nil {
+		return domain.OccurrenceMutationRequest{}, "use occurrence_at or occurrence_date, not both"
+	}
+
+	mutation := domain.OccurrenceMutationRequest{
+		OccurrenceAt:   occurrenceAt,
+		OccurrenceDate: occurrenceDate,
+	}
+	if !requireReplacement {
+		if strings.TrimSpace(request.StartAt) != "" || strings.TrimSpace(request.EndAt) != "" ||
+			strings.TrimSpace(request.StartDate) != "" || strings.TrimSpace(request.EndDate) != "" ||
+			strings.TrimSpace(request.DueAt) != "" || strings.TrimSpace(request.DueDate) != "" {
+			return domain.OccurrenceMutationRequest{}, "canceled occurrences cannot include replacement timing"
+		}
+		return mutation, ""
+	}
+
+	if event {
+		startAt, rejection := parseOptionalTime("start_at", request.StartAt)
+		if rejection != "" {
+			return domain.OccurrenceMutationRequest{}, rejection
+		}
+		endAt, rejection := parseOptionalTime("end_at", request.EndAt)
+		if rejection != "" {
+			return domain.OccurrenceMutationRequest{}, rejection
+		}
+		startDate, rejection := parseOptionalDate("start_date", request.StartDate)
+		if rejection != "" {
+			return domain.OccurrenceMutationRequest{}, rejection
+		}
+		endDate, rejection := parseOptionalDate("end_date", request.EndDate)
+		if rejection != "" {
+			return domain.OccurrenceMutationRequest{}, rejection
+		}
+		if startAt != nil && startDate != nil {
+			return domain.OccurrenceMutationRequest{}, "use start_at or start_date, not both"
+		}
+		if startAt == nil && startDate == nil {
+			return domain.OccurrenceMutationRequest{}, "start_at or start_date is required"
+		}
+		if endAt != nil && startAt == nil {
+			return domain.OccurrenceMutationRequest{}, "start_at is required when end_at is provided"
+		}
+		if startAt != nil && endAt != nil && !endAt.After(*startAt) {
+			return domain.OccurrenceMutationRequest{}, "end_at must be after start_at"
+		}
+		if endDate != nil && startDate == nil {
+			return domain.OccurrenceMutationRequest{}, "start_date is required when end_date is provided"
+		}
+		if startDate != nil && endDate != nil && *endDate < *startDate {
+			return domain.OccurrenceMutationRequest{}, "end_date must not be before start_date"
+		}
+		if strings.TrimSpace(request.DueAt) != "" || strings.TrimSpace(request.DueDate) != "" {
+			return domain.OccurrenceMutationRequest{}, "event occurrence reschedules use start_at or start_date"
+		}
+		mutation.ReplacementAt = startAt
+		mutation.ReplacementEndAt = endAt
+		mutation.ReplacementDate = startDate
+		mutation.ReplacementEndDate = endDate
+		return mutation, ""
+	}
+
+	dueAt, rejection := parseOptionalTime("due_at", request.DueAt)
+	if rejection != "" {
+		return domain.OccurrenceMutationRequest{}, rejection
+	}
+	dueDate, rejection := parseOptionalDate("due_date", request.DueDate)
+	if rejection != "" {
+		return domain.OccurrenceMutationRequest{}, rejection
+	}
+	if dueAt == nil && dueDate == nil {
+		return domain.OccurrenceMutationRequest{}, "due_at or due_date is required"
+	}
+	if dueAt != nil && dueDate != nil {
+		return domain.OccurrenceMutationRequest{}, "use due_at or due_date, not both"
+	}
+	if strings.TrimSpace(request.StartAt) != "" || strings.TrimSpace(request.EndAt) != "" ||
+		strings.TrimSpace(request.StartDate) != "" || strings.TrimSpace(request.EndDate) != "" {
+		return domain.OccurrenceMutationRequest{}, "task occurrence reschedules use due_at or due_date"
+	}
+	mutation.ReplacementAt = dueAt
+	mutation.ReplacementDate = dueDate
+	return mutation, ""
 }
 
 func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*domain.RecurrenceRule, string) {
@@ -1740,6 +1962,9 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*domain.Recu
 	if rule.UntilAt != nil && rule.UntilDate != nil {
 		return nil, "use recurrence.until_at or recurrence.until_date, not both"
 	}
+	if rule.Count != nil && (rule.UntilAt != nil || rule.UntilDate != nil) {
+		return nil, "use recurrence.count or recurrence.until, not both"
+	}
 	if len(input.ByWeekday) > 0 {
 		if rule.Frequency != domain.RecurrenceFrequencyWeekly {
 			return nil, "recurrence.by_weekday is only supported for weekly recurrence"
@@ -1754,10 +1979,15 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*domain.Recu
 		if rule.Frequency != domain.RecurrenceFrequencyMonthly {
 			return nil, "recurrence.by_month_day is only supported for monthly recurrence"
 		}
+		seen := map[int32]bool{}
 		for _, day := range input.ByMonthDay {
 			if day < 1 || day > 31 {
 				return nil, "recurrence.by_month_day values must be between 1 and 31"
 			}
+			if seen[day] {
+				return nil, "recurrence.by_month_day cannot contain duplicates"
+			}
+			seen[day] = true
 		}
 		rule.ByMonthDay = append([]int32(nil), input.ByMonthDay...)
 	}
@@ -1767,10 +1997,16 @@ func normalizeRecurrence(input *RecurrenceRuleRequest, timed bool) (*domain.Recu
 
 func normalizeWeekdays(values []string) ([]domain.Weekday, string) {
 	out := make([]domain.Weekday, 0, len(values))
+	seen := map[domain.Weekday]bool{}
 	for _, value := range values {
-		switch domain.Weekday(strings.TrimSpace(value)) {
+		weekday := domain.Weekday(strings.TrimSpace(value))
+		switch weekday {
 		case domain.WeekdayMonday, domain.WeekdayTuesday, domain.WeekdayWednesday, domain.WeekdayThursday, domain.WeekdayFriday, domain.WeekdaySaturday, domain.WeekdaySunday:
-			out = append(out, domain.Weekday(strings.TrimSpace(value)))
+			if seen[weekday] {
+				return nil, "recurrence.by_weekday cannot contain duplicates"
+			}
+			seen[weekday] = true
+			out = append(out, weekday)
 		default:
 			return nil, "recurrence.by_weekday values must be MO, TU, WE, TH, FR, SA, or SU"
 		}

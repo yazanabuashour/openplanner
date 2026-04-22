@@ -25,7 +25,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"event_attendees",
@@ -34,6 +34,8 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"event_task_links_task_idx",
 		"events",
 		"events_calendar_idx",
+		"recurrence_occurrence_states",
+		"recurrence_occurrence_states_owner_idx",
 		"reminder_dismissals",
 		"reminders",
 		"reminders_owner_idx",
@@ -63,7 +65,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -136,7 +138,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -159,7 +161,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (6);
+		INSERT INTO schema_migrations (version) VALUES (7);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 6 is newer than supported version 5") {
+	if !strings.Contains(err.Error(), "database schema version 7 is newer than supported version 6") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -557,6 +559,87 @@ func TestEventTaskLinksPersistListDeleteAndCascade(t *testing.T) {
 	}
 	if len(afterCascade) != 0 {
 		t.Fatalf("links after cascade = %#v, want none", afterCascade)
+	}
+}
+
+func TestOccurrenceStatesPersistUpdateAndCascade(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	calendar := domain.Calendar{ID: "cal-occurrences", Name: "Occurrences", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(calendar); err != nil {
+		t.Fatalf("CreateCalendar(): %v", err)
+	}
+	event := domain.Event{
+		ID:         "event-occurrences",
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartDate:  stringPtr("2026-04-21"),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repository.CreateEvent(event); err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	occurrenceDate := "2026-04-21"
+	replacementDate := "2026-04-22"
+	state := domain.OccurrenceState{
+		OwnerKind:       domain.OccurrenceOwnerKindEvent,
+		OwnerID:         event.ID,
+		OccurrenceKey:   event.ID + "@2026-04-21",
+		OccurrenceDate:  &occurrenceDate,
+		ReplacementDate: &replacementDate,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := repository.UpsertOccurrenceState(state); err != nil {
+		t.Fatalf("UpsertOccurrenceState(): %v", err)
+	}
+
+	states, err := repository.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, []string{event.ID})
+	if err != nil {
+		t.Fatalf("ListOccurrenceStates(): %v", err)
+	}
+	stored := states[event.ID][state.OccurrenceKey]
+	if stored.ReplacementDate == nil || *stored.ReplacementDate != replacementDate || stored.Cancelled {
+		t.Fatalf("stored occurrence state = %#v, want replacement date", stored)
+	}
+
+	state.Cancelled = true
+	state.ReplacementDate = nil
+	state.UpdatedAt = now.Add(time.Minute)
+	if err := repository.UpsertOccurrenceState(state); err != nil {
+		t.Fatalf("UpsertOccurrenceState(update): %v", err)
+	}
+	states, err = repository.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, []string{event.ID})
+	if err != nil {
+		t.Fatalf("ListOccurrenceStates(update): %v", err)
+	}
+	stored = states[event.ID][state.OccurrenceKey]
+	if !stored.Cancelled || stored.ReplacementDate != nil {
+		t.Fatalf("updated occurrence state = %#v, want cancellation", stored)
+	}
+
+	if err := repository.DeleteEvent(event.ID); err != nil {
+		t.Fatalf("DeleteEvent(): %v", err)
+	}
+	states, err = repository.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, []string{event.ID})
+	if err != nil {
+		t.Fatalf("ListOccurrenceStates(after cascade): %v", err)
+	}
+	if len(states[event.ID]) != 0 {
+		t.Fatalf("states after cascade = %#v, want none", states)
 	}
 }
 

@@ -91,6 +91,10 @@ Supported routine actions are:
 - `create_event_task_link`
 - `delete_event_task_link`
 - `list_event_task_links`
+- `cancel_event_occurrence`
+- `reschedule_event_occurrence`
+- `cancel_task_occurrence`
+- `reschedule_task_occurrence`
 - `list_agenda`
 - `list_events`
 - `list_tasks`
@@ -103,6 +107,20 @@ Update actions use patch semantics: omitted fields are preserved, non-null
 fields are set, and `null` clears clearable optional fields. Use `event_id` for
 `update_event`, `task_id` for `update_task`, and exactly one of `calendar_id` or
 `calendar_name` for `update_calendar`.
+
+Recurring events and tasks support occurrence-level cancellation and timing-only
+reschedules without changing the base recurrence rule. Use `occurrence_at` for
+timed occurrences and `occurrence_date` for all-day events or date-based tasks.
+Agenda entries keep a stable `occurrence_key` based on the original occurrence;
+use that key with `complete_task` when completing a moved recurring task.
+
+```json
+{"action":"cancel_event_occurrence","event_id":"<event-id>","occurrence_at":"2026-04-17T09:00:00Z"}
+{"action":"reschedule_event_occurrence","event_id":"<event-id>","occurrence_at":"2026-04-18T09:00:00Z","start_at":"2026-04-19T11:00:00Z"}
+{"action":"cancel_task_occurrence","task_id":"<task-id>","occurrence_date":"2026-04-17"}
+{"action":"reschedule_task_occurrence","task_id":"<task-id>","occurrence_date":"2026-04-18","due_date":"2026-04-19"}
+{"action":"complete_task","task_id":"<task-id>","occurrence_key":"<key-from-list-agenda-result>"}
+```
 
 Events support optional attendee metadata through `attendees`. Each attendee
 requires `email`; optional fields are `display_name`, `role`, `participation_status`,

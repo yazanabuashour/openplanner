@@ -171,6 +171,40 @@ var migrations = []migration{
 			CREATE INDEX IF NOT EXISTS event_attendees_event_position_idx ON event_attendees(event_id, position);
 		`,
 	},
+	{
+		version: 6,
+		name:    "recurrence occurrence states",
+		sql: `
+			CREATE TABLE IF NOT EXISTS recurrence_occurrence_states (
+				owner_kind TEXT NOT NULL CHECK (owner_kind IN ('event', 'task')),
+				owner_id TEXT NOT NULL,
+				event_id TEXT REFERENCES events(id) ON DELETE CASCADE,
+				task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+				occurrence_key TEXT NOT NULL,
+				occurrence_at TEXT,
+				occurrence_date TEXT,
+				cancelled INTEGER NOT NULL CHECK (cancelled IN (0, 1)),
+				replacement_at TEXT,
+				replacement_end_at TEXT,
+				replacement_date TEXT,
+				replacement_end_date TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (owner_kind, owner_id, occurrence_key),
+				CHECK (
+					(owner_kind = 'event' AND event_id = owner_id AND task_id IS NULL) OR
+					(owner_kind = 'task' AND task_id = owner_id AND event_id IS NULL)
+				),
+				CHECK (
+					(occurrence_at IS NOT NULL AND occurrence_date IS NULL) OR
+					(occurrence_at IS NULL AND occurrence_date IS NOT NULL)
+				)
+			);
+
+			CREATE INDEX IF NOT EXISTS recurrence_occurrence_states_owner_idx
+				ON recurrence_occurrence_states(owner_kind, owner_id);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -770,6 +804,88 @@ func (store *Store) ListTaskCompletions(taskIDs []string) (map[string]map[string
 	}
 
 	return completions, nil
+}
+
+func (store *Store) UpsertOccurrenceState(state domain.OccurrenceState) error {
+	eventID := sql.NullString{}
+	taskID := sql.NullString{}
+	switch state.OwnerKind {
+	case domain.OccurrenceOwnerKindEvent:
+		eventID = sql.NullString{String: state.OwnerID, Valid: true}
+	case domain.OccurrenceOwnerKindTask:
+		taskID = sql.NullString{String: state.OwnerID, Valid: true}
+	}
+
+	_, err := store.db.Exec(`
+		INSERT INTO recurrence_occurrence_states (
+			owner_kind, owner_id, event_id, task_id, occurrence_key,
+			occurrence_at, occurrence_date, cancelled,
+			replacement_at, replacement_end_at, replacement_date, replacement_end_date,
+			created_at, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(owner_kind, owner_id, occurrence_key) DO UPDATE SET
+			occurrence_at = excluded.occurrence_at,
+			occurrence_date = excluded.occurrence_date,
+			cancelled = excluded.cancelled,
+			replacement_at = excluded.replacement_at,
+			replacement_end_at = excluded.replacement_end_at,
+			replacement_date = excluded.replacement_date,
+			replacement_end_date = excluded.replacement_end_date,
+			updated_at = excluded.updated_at
+	`, state.OwnerKind, state.OwnerID, eventID, taskID, state.OccurrenceKey,
+		nullableTime(state.OccurrenceAt), nullableString(state.OccurrenceDate), boolInt(state.Cancelled),
+		nullableTime(state.ReplacementAt), nullableTime(state.ReplacementEndAt), nullableString(state.ReplacementDate), nullableString(state.ReplacementEndDate),
+		formatTime(state.CreatedAt), formatTime(state.UpdatedAt))
+	if err != nil {
+		return mapWriteError(err)
+	}
+
+	return nil
+}
+
+func (store *Store) ListOccurrenceStates(ownerKind domain.OccurrenceOwnerKind, ownerIDs []string) (map[string]map[string]domain.OccurrenceState, error) {
+	states := make(map[string]map[string]domain.OccurrenceState, len(ownerIDs))
+	if len(ownerIDs) == 0 {
+		return states, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ownerIDs)), ",")
+	args := make([]any, 0, len(ownerIDs)+1)
+	args = append(args, ownerKind)
+	for _, ownerID := range ownerIDs {
+		args = append(args, ownerID)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT owner_kind, owner_id, occurrence_key, occurrence_at, occurrence_date, cancelled,
+		       replacement_at, replacement_end_at, replacement_date, replacement_end_date,
+		       created_at, updated_at
+		FROM recurrence_occurrence_states
+		WHERE owner_kind = ? AND owner_id IN (`+placeholders+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list occurrence states: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		state, err := scanOccurrenceState(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan occurrence state: %w", err)
+		}
+		if _, ok := states[state.OwnerID]; !ok {
+			states[state.OwnerID] = map[string]domain.OccurrenceState{}
+		}
+		states[state.OwnerID][state.OccurrenceKey] = state
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate occurrence states: %w", err)
+	}
+
+	return states, nil
 }
 
 func (store *Store) GetReminder(id string) (domain.ReminderRule, error) {
@@ -1595,6 +1711,40 @@ func scanEventTaskLink(scanner interface {
 	return link, nil
 }
 
+func scanOccurrenceState(scanner interface {
+	Scan(dest ...any) error
+}) (domain.OccurrenceState, error) {
+	var (
+		state              domain.OccurrenceState
+		occurrenceAt       sql.NullString
+		occurrenceDate     sql.NullString
+		cancelled          int
+		replacementAt      sql.NullString
+		replacementEndAt   sql.NullString
+		replacementDate    sql.NullString
+		replacementEndDate sql.NullString
+		createdAt          string
+		updatedAt          string
+	)
+	if err := scanner.Scan(
+		&state.OwnerKind, &state.OwnerID, &state.OccurrenceKey, &occurrenceAt, &occurrenceDate, &cancelled,
+		&replacementAt, &replacementEndAt, &replacementDate, &replacementEndDate,
+		&createdAt, &updatedAt,
+	); err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	state.OccurrenceAt = parseNullableTime(occurrenceAt)
+	state.OccurrenceDate = parseNullableString(occurrenceDate)
+	state.Cancelled = cancelled != 0
+	state.ReplacementAt = parseNullableTime(replacementAt)
+	state.ReplacementEndAt = parseNullableTime(replacementEndAt)
+	state.ReplacementDate = parseNullableString(replacementDate)
+	state.ReplacementEndDate = parseNullableString(replacementEndDate)
+	state.CreatedAt = parseStoredTime(createdAt)
+	state.UpdatedAt = parseStoredTime(updatedAt)
+	return state, nil
+}
+
 func marshalTags(tags []string) (string, error) {
 	if tags == nil {
 		tags = []string{}
@@ -1679,6 +1829,13 @@ func nullableTime(value *time.Time) sql.NullString {
 	}
 
 	return sql.NullString{String: formatTime(*value), Valid: true}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func parseNullableString(value sql.NullString) *string {

@@ -215,6 +215,7 @@ type ReminderDismissal struct {
 }
 
 type TaskCompletionRequest struct {
+	OccurrenceKey  string
 	OccurrenceAt   *time.Time
 	OccurrenceDate *string
 }
@@ -225,6 +226,38 @@ type TaskCompletion struct {
 	OccurrenceAt   *time.Time
 	OccurrenceDate *string
 	CompletedAt    time.Time
+}
+
+type OccurrenceOwnerKind string
+
+const (
+	OccurrenceOwnerKindEvent OccurrenceOwnerKind = "event"
+	OccurrenceOwnerKindTask  OccurrenceOwnerKind = "task"
+)
+
+type OccurrenceMutationRequest struct {
+	OccurrenceKey      string
+	OccurrenceAt       *time.Time
+	OccurrenceDate     *string
+	ReplacementAt      *time.Time
+	ReplacementEndAt   *time.Time
+	ReplacementDate    *string
+	ReplacementEndDate *string
+}
+
+type OccurrenceState struct {
+	OwnerKind          OccurrenceOwnerKind
+	OwnerID            string
+	OccurrenceKey      string
+	OccurrenceAt       *time.Time
+	OccurrenceDate     *string
+	Cancelled          bool
+	ReplacementAt      *time.Time
+	ReplacementEndAt   *time.Time
+	ReplacementDate    *string
+	ReplacementEndDate *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type AgendaItemKind string

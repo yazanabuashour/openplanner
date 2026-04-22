@@ -309,6 +309,50 @@ func (runtime *localRuntime) ListEventTaskLinks(ctx context.Context, filter doma
 	return service.ListEventTaskLinks(filter)
 }
 
+func (runtime *localRuntime) CancelEventOccurrence(ctx context.Context, eventID string, input domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.CancelEventOccurrence(eventID, input)
+}
+
+func (runtime *localRuntime) RescheduleEventOccurrence(ctx context.Context, eventID string, input domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.RescheduleEventOccurrence(eventID, input)
+}
+
+func (runtime *localRuntime) CancelTaskOccurrence(ctx context.Context, taskID string, input domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.CancelTaskOccurrence(taskID, input)
+}
+
+func (runtime *localRuntime) RescheduleTaskOccurrence(ctx context.Context, taskID string, input domain.OccurrenceMutationRequest) (domain.OccurrenceState, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.OccurrenceState{}, err
+	}
+	return service.RescheduleTaskOccurrence(taskID, input)
+}
+
 func (runtime *localRuntime) CompleteTask(ctx context.Context, taskID string, input domain.TaskCompletionRequest) (domain.TaskCompletion, error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.TaskCompletion{}, err
