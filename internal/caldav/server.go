@@ -396,9 +396,9 @@ func (server *Server) handlePut(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	content, err := io.ReadAll(io.LimitReader(request.Body, 2<<20))
+	content, err := readLimitedRequestBody(request.Body, maxCalDAVRequestBodyBytes)
 	if err != nil {
-		http.Error(writer, "read request body", http.StatusBadRequest)
+		http.Error(writer, "read request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := validateSingleCalendarObject(string(content)); err != nil {

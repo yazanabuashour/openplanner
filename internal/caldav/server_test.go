@@ -736,6 +736,23 @@ func TestPutRejectsMultipleCalendarObjects(t *testing.T) {
 	assertBodyContains(t, response, "exactly one base VEVENT or VTODO")
 }
 
+func TestPutRejectsOversizedBodyWithoutCreatingObject(t *testing.T) {
+	server, svc := newTestServer(t)
+	calendar := createCalendar(t, svc)
+
+	response := request(server, http.MethodPut, objectHref(calendar.ID, "oversized.ics"), strings.Repeat("x", maxCalDAVRequestBodyBytes+1), map[string]string{"Content-Type": "text/calendar"})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PUT status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertBodyContains(t, response, "read request body")
+	assertBodyContains(t, response, "exceeds")
+
+	fetched := request(server, http.MethodGet, objectHref(calendar.ID, "oversized.ics"), "", nil)
+	if fetched.Code != http.StatusNotFound {
+		t.Fatalf("GET oversized rejected object status = %d, body = %s", fetched.Code, fetched.Body.String())
+	}
+}
+
 func TestDeleteCalendarObject(t *testing.T) {
 	server, svc := newTestServer(t)
 	calendar := createCalendar(t, svc)

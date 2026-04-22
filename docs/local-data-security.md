@@ -87,29 +87,39 @@ Current mitigations:
 - Runner actions validate required IDs, calendar references, dates, recurrence,
   attendees, reminders, tags, task metadata, and pagination limits before
   opening the local database where practical.
+- The JSON runner rejects stdin requests larger than 4 MiB before opening the
+  database.
 - Calendar deletion is empty-calendar-only and does not cascade to contained
   events or tasks.
 - iCalendar import skips unsupported components instead of importing ambiguous
   partial data where validation fails.
+- iCalendar imports reject `content` larger than 2 MiB or more than 2,000 total
+  `VEVENT`/`VTODO` base and override components before writing imported data.
 - CalDAV `PUT` only accepts one base `VEVENT` or `VTODO` per request.
+- CalDAV `PUT` rejects request bodies larger than 2 MiB instead of truncating
+  oversized input.
 - CalDAV resource resolution is scoped to the requested calendar.
 
 Remaining hardening:
 
-- Add bounded input handling in `op-xge`.
 - Add parser-focused fuzz and regression coverage in `op-5gj`.
 - Keep CalDAV experimental and loopback-only.
 
 ### Parser And Server Denial Of Service
 
-The highest current denial-of-service risk is local parsing of large or unusual
-JSON, `.ics`, or XML payloads. CalDAV `PUT` currently reads through a limited
-reader, but oversized request handling should be explicit rather than relying
-on truncation and parser failure. CalDAV `PROPFIND` and `REPORT` XML reads also
-need explicit body limits. The JSON runner and `import_icalendar` path need
-documented size and component limits.
+The highest current denial-of-service risk is local parsing of unusual JSON,
+`.ics`, or XML payloads. OpenPlanner applies explicit local input ceilings to
+the parser and server entrypoints:
 
-Track this work in `op-xge` and parser hardening tests in `op-5gj`.
+- `openplanner planning` reads one JSON stdin request up to 4 MiB.
+- `import_icalendar` accepts iCalendar `content` up to 2 MiB and 2,000 total
+  `VEVENT`/`VTODO` base and override components.
+- CalDAV `PROPFIND` and `REPORT` XML request bodies are limited to 2 MiB and an
+  XML depth of 64.
+- CalDAV `PUT` request bodies are limited to 2 MiB.
+
+Parser hardening tests for malformed, oversized, nested, and unusual inputs are
+tracked in `op-5gj`.
 
 ### Cross-Calendar Leakage
 
@@ -162,7 +172,6 @@ Use targeted tests for:
 
 Security-specific follow-ups:
 
-- `op-xge`: bound local planning parser and server inputs.
 - `op-5gj`: add parser hardening fuzz and regression coverage.
 - `op-d7k`: enforce loopback-only CalDAV local compatibility mode.
 - `op-6g9`: ensure private permissions for local OpenPlanner data files.

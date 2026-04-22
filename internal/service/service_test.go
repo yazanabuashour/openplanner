@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1339,6 +1340,51 @@ func TestImportICalendarReimportRemovesStaleOccurrenceState(t *testing.T) {
 	}
 }
 
+func TestImportICalendarRejectsOversizedContent(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	_, err := svc.ImportICalendar(domain.ICalendarImportRequest{Content: strings.Repeat("x", (2<<20)+1)})
+	assertICalendarImportContentValidation(t, err)
+
+	calendars, listErr := svc.ListCalendars(domain.PageParams{})
+	if listErr != nil {
+		t.Fatalf("ListCalendars(): %v", listErr)
+	}
+	if len(calendars.Items) != 0 {
+		t.Fatalf("calendars = %#v, want no writes after rejected import", calendars.Items)
+	}
+}
+
+func TestImportICalendarRejectsTooManyComponents(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	var content strings.Builder
+	content.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0")
+	for i := range 2001 {
+		content.WriteString("\r\nBEGIN:VEVENT")
+		content.WriteString("\r\nUID:component-")
+		content.WriteString(strconv.Itoa(i))
+		content.WriteString("@example.com")
+		content.WriteString("\r\nSUMMARY:Too many components")
+		content.WriteString("\r\nDTSTART;VALUE=DATE:20260420")
+		content.WriteString("\r\nEND:VEVENT")
+	}
+	content.WriteString("\r\nEND:VCALENDAR")
+
+	_, err := svc.ImportICalendar(domain.ICalendarImportRequest{Content: content.String()})
+	assertICalendarImportContentValidation(t, err)
+
+	calendars, listErr := svc.ListCalendars(domain.PageParams{})
+	if listErr != nil {
+		t.Fatalf("ListCalendars(): %v", listErr)
+	}
+	if len(calendars.Items) != 0 {
+		t.Fatalf("calendars = %#v, want no writes after rejected import", calendars.Items)
+	}
+}
+
 func TestImportICalendarProviderMigrationFixtures(t *testing.T) {
 	t.Parallel()
 
@@ -1791,6 +1837,23 @@ func eventByTitle(t *testing.T, events []domain.Event, title string) domain.Even
 	}
 	t.Fatalf("event %q not found in %#v", title, events)
 	return domain.Event{}
+}
+
+func assertICalendarImportContentValidation(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("ImportICalendar() error = nil, want validation error")
+	}
+	var validationErr *service.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ImportICalendar() error = %T, want ValidationError", err)
+	}
+	if validationErr.Message != "icalendar import validation failed" {
+		t.Fatalf("validation message = %q, want import validation failure", validationErr.Message)
+	}
+	if len(validationErr.FieldErrors) != 1 || validationErr.FieldErrors[0].Field != "content" || validationErr.FieldErrors[0].Message == "" {
+		t.Fatalf("field errors = %#v, want content field error", validationErr.FieldErrors)
+	}
 }
 
 func int32Ptr(value int32) *int32 {

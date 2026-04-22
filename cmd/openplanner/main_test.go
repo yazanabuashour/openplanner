@@ -149,6 +149,29 @@ func TestPlanningRunnerBadJSONExitsNonZero(t *testing.T) {
 	}
 }
 
+func TestPlanningRunnerOversizedJSONExitsBeforeOpeningDatabase(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "runner.db")
+	input := `{"action":"validate","content":"` + strings.Repeat("x", 4<<20) + `"}`
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"planning", "--db", databasePath}, bytes.NewBufferString(input), &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("exit = 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "planning request exceeds 4194304 bytes") {
+		t.Fatalf("stderr = %q, want request size error", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if _, err := os.Stat(databasePath); !os.IsNotExist(err) {
+		t.Fatalf("database path exists after oversized decode rejection: %v", err)
+	}
+}
+
 func TestCalDAVRunnerPassesDBFlagAndAddr(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "caldav.db")
 	var captured caldav.Options

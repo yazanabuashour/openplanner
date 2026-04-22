@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	maxPlanningRequestBytes                     = 4 << 20
 	PlanningTaskActionEnsureCalendar            = "ensure_calendar"
 	PlanningTaskActionCreateEvent               = "create_event"
 	PlanningTaskActionCreateTask                = "create_task"
@@ -298,7 +299,12 @@ type normalizedPlanningTaskRequest struct {
 }
 
 func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
-	decoder := json.NewDecoder(reader)
+	content, err := readLimitedPlanningRequest(reader)
+	if err != nil {
+		return PlanningTaskRequest{}, err
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
 
 	var raw map[string]json.RawMessage
@@ -316,7 +322,7 @@ func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
 	}
 
 	var request PlanningTaskRequest
-	content, err := json.Marshal(raw)
+	content, err = json.Marshal(raw)
 	if err != nil {
 		return PlanningTaskRequest{}, err
 	}
@@ -325,6 +331,17 @@ func DecodePlanningTaskRequest(reader io.Reader) (PlanningTaskRequest, error) {
 	}
 	populatePatchFields(raw, &request)
 	return request, nil
+}
+
+func readLimitedPlanningRequest(reader io.Reader) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, maxPlanningRequestBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxPlanningRequestBytes {
+		return nil, fmt.Errorf("planning request exceeds %d bytes", maxPlanningRequestBytes)
+	}
+	return content, nil
 }
 
 func decodeStrictJSON(content []byte, dest any) error {

@@ -650,6 +650,7 @@ func TestRunPlanningTaskImportICalendarRejections(t *testing.T) {
 		{Action: PlanningTaskActionImportICalendar, Content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR", CalendarName: "Work", CalendarID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
 		{Action: PlanningTaskActionImportICalendar, Content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR", Limit: &limit},
 		{Action: PlanningTaskActionImportICalendar, Content: "not an ics file"},
+		{Action: PlanningTaskActionImportICalendar, Content: strings.Repeat("x", (2<<20)+1)},
 	}
 	for _, request := range tests {
 		result, err := RunPlanningTask(ctx, options, request)

@@ -24,6 +24,11 @@ var (
 	tagPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
 )
 
+const (
+	maxICalendarImportBytes      = 2 << 20
+	maxICalendarImportComponents = 2000
+)
+
 type Service struct {
 	store *store.Store
 	now   func() time.Time
@@ -560,26 +565,24 @@ func (service *Service) ExportICalendar(calendarID string) (domain.ICalendarExpo
 }
 
 func (service *Service) ImportICalendar(request domain.ICalendarImportRequest) (domain.ICalendarImport, error) {
+	if len(request.Content) > maxICalendarImportBytes {
+		return domain.ICalendarImport{}, icalendarImportValidationError("content", fmt.Sprintf("content must be less than or equal to %d bytes", maxICalendarImportBytes))
+	}
+
 	content := strings.TrimSpace(request.Content)
 	if content == "" {
-		return domain.ICalendarImport{}, &ValidationError{
-			Message:     "icalendar import validation failed",
-			FieldErrors: []FieldError{{Field: "content", Message: "content is required"}},
-		}
+		return domain.ICalendarImport{}, icalendarImportValidationError("content", "content is required")
 	}
 	if strings.TrimSpace(request.CalendarID) != "" && strings.TrimSpace(request.CalendarName) != "" {
-		return domain.ICalendarImport{}, &ValidationError{
-			Message:     "icalendar import validation failed",
-			FieldErrors: []FieldError{{Field: "calendar", Message: "use calendarId or calendarName, not both"}},
-		}
+		return domain.ICalendarImport{}, icalendarImportValidationError("calendar", "use calendarId or calendarName, not both")
 	}
 
 	parsed, err := icalendar.ParseImport(content)
 	if err != nil {
-		return domain.ICalendarImport{}, &ValidationError{
-			Message:     "icalendar import validation failed",
-			FieldErrors: []FieldError{{Field: "content", Message: err.Error()}},
-		}
+		return domain.ICalendarImport{}, icalendarImportValidationError("content", err.Error())
+	}
+	if componentCount := iCalendarImportComponentCount(parsed); componentCount > maxICalendarImportComponents {
+		return domain.ICalendarImport{}, icalendarImportValidationError("content", fmt.Sprintf("iCalendar import contains %d components; maximum is %d", componentCount, maxICalendarImportComponents))
 	}
 
 	result := domain.ICalendarImport{Skips: append([]domain.ICalendarImportSkip(nil), parsed.Skips...)}
@@ -747,6 +750,17 @@ func (service *Service) ImportICalendar(request domain.ICalendarImportRequest) (
 	result.CalendarCount = len(calendarIDs)
 	result.SkippedCount += len(result.Skips)
 	return result, nil
+}
+
+func icalendarImportValidationError(field string, message string) error {
+	return &ValidationError{
+		Message:     "icalendar import validation failed",
+		FieldErrors: []FieldError{{Field: field, Message: message}},
+	}
+}
+
+func iCalendarImportComponentCount(parsed icalendar.ParsedImport) int {
+	return len(parsed.Events) + len(parsed.EventChanges) + len(parsed.Tasks) + len(parsed.TaskChanges)
 }
 
 func (service *Service) resolveImportCalendar(request domain.ICalendarImportRequest, componentName string, color *string, cache map[string]domain.Calendar) (domain.Calendar, *domain.ICalendarImportWrite, error) {
