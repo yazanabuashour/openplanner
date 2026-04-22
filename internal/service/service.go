@@ -14,6 +14,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/yazanabuashour/openplanner/internal/domain"
+	"github.com/yazanabuashour/openplanner/internal/icalendar"
 	"github.com/yazanabuashour/openplanner/internal/recurrence"
 	"github.com/yazanabuashour/openplanner/internal/store"
 )
@@ -462,6 +463,82 @@ func (service *Service) ListTasks(params domain.TaskListParams) (domain.Page[dom
 	}
 
 	return paginateByCreatedAt(tasks, params.PageParams)
+}
+
+func (service *Service) ExportICalendar(calendarID string) (domain.ICalendarExport, error) {
+	if calendarID != "" {
+		if err := validateResourceID("calendarId", calendarID); err != nil {
+			return domain.ICalendarExport{}, err
+		}
+	}
+
+	calendars, err := service.store.ListCalendars()
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	exportCalendars := calendars
+	calendarName := ""
+	filename := "openplanner.ics"
+	if calendarID != "" {
+		found := false
+		for _, calendar := range calendars {
+			if calendar.ID == calendarID {
+				exportCalendars = []domain.Calendar{calendar}
+				calendarName = calendar.Name
+				filename = sanitizeICalendarFilename(calendar.Name)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return domain.ICalendarExport{}, &NotFoundError{Resource: "calendar", ID: calendarID, Message: "calendar not found"}
+		}
+	}
+
+	events, err := service.store.ListEvents(calendarID)
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	tasks, err := service.store.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{CalendarID: calendarID}})
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+
+	eventIDs := recurringEventIDs(events)
+	taskIDs := recurringTaskIDs(tasks)
+	eventStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindEvent, eventIDs)
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	taskStates, err := service.store.ListOccurrenceStates(domain.OccurrenceOwnerKindTask, taskIDs)
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	taskCompletions, err := service.store.ListTaskCompletions(taskIDs)
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+
+	result := icalendar.Build(icalendar.Export{
+		Calendars:             exportCalendars,
+		Events:                events,
+		Tasks:                 tasks,
+		EventOccurrenceStates: eventStates,
+		TaskOccurrenceStates:  taskStates,
+		TaskCompletions:       taskCompletions,
+		GeneratedAt:           service.now(),
+		Name:                  calendarExportName(calendarName),
+	})
+
+	return domain.ICalendarExport{
+		ContentType:  result.ContentType,
+		Filename:     filename,
+		CalendarID:   calendarID,
+		CalendarName: calendarName,
+		EventCount:   result.EventCount,
+		TaskCount:    result.TaskCount,
+		Content:      result.Content,
+	}, nil
 }
 
 func (service *Service) GetTask(id string) (domain.Task, error) {
@@ -2800,6 +2877,59 @@ func cloneRule(value *domain.RecurrenceRule) *domain.RecurrenceRule {
 	}
 
 	return &clone
+}
+
+func recurringEventIDs(events []domain.Event) []string {
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Recurrence != nil {
+			ids = append(ids, event.ID)
+		}
+	}
+	return ids
+}
+
+func recurringTaskIDs(tasks []domain.Task) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Recurrence != nil {
+			ids = append(ids, task.ID)
+		}
+	}
+	return ids
+}
+
+func calendarExportName(calendarName string) string {
+	if strings.TrimSpace(calendarName) != "" {
+		return calendarName
+	}
+	return "OpenPlanner"
+}
+
+func sanitizeICalendarFilename(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	var builder strings.Builder
+	lastDash := false
+	for _, value := range name {
+		switch {
+		case value >= 'a' && value <= 'z', value >= '0' && value <= '9':
+			builder.WriteRune(value)
+			lastDash = false
+		case value == '_' || value == '.':
+			builder.WriteRune(value)
+			lastDash = false
+		default:
+			if !lastDash {
+				builder.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	base := strings.Trim(builder.String(), "-.")
+	if base == "" {
+		base = "openplanner"
+	}
+	return base + ".ics"
 }
 
 func occursInTimedRange(start, end, from, to time.Time) bool {

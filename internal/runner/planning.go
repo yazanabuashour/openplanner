@@ -42,6 +42,7 @@ const (
 	PlanningTaskActionCompleteTask              = "complete_task"
 	PlanningTaskActionListReminders             = "list_pending_reminders"
 	PlanningTaskActionDismissReminder           = "dismiss_reminder"
+	PlanningTaskActionExportICalendar           = "export_icalendar"
 	PlanningTaskActionValidate                  = "validate"
 )
 
@@ -120,6 +121,7 @@ type PlanningTaskResult struct {
 	Agenda          []AgendaEntry        `json:"agenda,omitempty"`
 	Reminders       []ReminderEntry      `json:"reminders,omitempty"`
 	EventTaskLinks  []EventTaskLinkEntry `json:"event_task_links,omitempty"`
+	ICalendar       *ICalendarEntry      `json:"icalendar,omitempty"`
 	NextCursor      string               `json:"next_cursor,omitempty"`
 	Summary         string               `json:"summary"`
 }
@@ -199,6 +201,16 @@ type AgendaEntry struct {
 type EventTaskLinkEntry struct {
 	EventID string `json:"event_id"`
 	TaskID  string `json:"task_id"`
+}
+
+type ICalendarEntry struct {
+	ContentType  string `json:"content_type"`
+	Filename     string `json:"filename"`
+	CalendarID   string `json:"calendar_id,omitempty"`
+	CalendarName string `json:"calendar_name,omitempty"`
+	EventCount   int    `json:"event_count"`
+	TaskCount    int    `json:"task_count"`
+	Content      string `json:"content"`
 }
 
 type ReminderRuleEntry struct {
@@ -582,6 +594,8 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runListPendingReminders(ctx, api, request)
 	case PlanningTaskActionDismissReminder:
 		return runDismissReminder(ctx, api, request)
+	case PlanningTaskActionExportICalendar:
+		return runExportICalendar(ctx, api, request)
 	default:
 		return rejectedResult(fmt.Sprintf("unsupported planning task action %q", request.Action)), nil
 	}
@@ -931,6 +945,29 @@ func runListTasks(ctx context.Context, api *localRuntime, request normalizedPlan
 		result.NextCursor = *page.NextCursor
 	}
 	return result, nil
+}
+
+func runExportICalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	calendarID := request.CalendarID
+	if request.CalendarName != "" {
+		calendar, found, err := findCalendarByName(ctx, api, request.CalendarName)
+		if err != nil {
+			return PlanningTaskResult{}, err
+		}
+		if !found {
+			return rejectedResult(fmt.Sprintf("calendar %q was not found", request.CalendarName)), nil
+		}
+		calendarID = calendar.ID
+	}
+	export, err := api.ExportICalendar(ctx, calendarID)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	entry := iCalendarEntry(export)
+	return PlanningTaskResult{
+		ICalendar: &entry,
+		Summary:   exportICalendarSummary(export),
+	}, nil
 }
 
 func runCompleteTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
@@ -1291,6 +1328,14 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 			return normalizedPlanningTaskRequest{}, "reminder_occurrence_id is required"
 		}
 		normalized.ReminderOccurrenceID = reminderOccurrenceID
+		return normalized, ""
+	case PlanningTaskActionExportICalendar:
+		if strings.TrimSpace(request.From) != "" || strings.TrimSpace(request.To) != "" || strings.TrimSpace(request.Cursor) != "" || request.Limit != nil {
+			return normalizedPlanningTaskRequest{}, "export_icalendar does not accept from, to, cursor, or limit"
+		}
+		if rejection := normalizeOptionalCalendarFilter(request, &normalized); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
 		return normalized, ""
 	default:
 		return normalizedPlanningTaskRequest{}, fmt.Sprintf("unsupported planning task action %q", action)
@@ -2573,6 +2618,25 @@ func eventTaskLinkEntry(link domain.EventTaskLink) EventTaskLinkEntry {
 		EventID: link.EventID,
 		TaskID:  link.TaskID,
 	}
+}
+
+func iCalendarEntry(export domain.ICalendarExport) ICalendarEntry {
+	return ICalendarEntry{
+		ContentType:  export.ContentType,
+		Filename:     export.Filename,
+		CalendarID:   export.CalendarID,
+		CalendarName: export.CalendarName,
+		EventCount:   export.EventCount,
+		TaskCount:    export.TaskCount,
+		Content:      export.Content,
+	}
+}
+
+func exportICalendarSummary(export domain.ICalendarExport) string {
+	if export.CalendarID != "" {
+		return "exported 1 calendar to iCalendar"
+	}
+	return fmt.Sprintf("exported %d events and %d tasks", export.EventCount, export.TaskCount)
 }
 
 func reminderEntries(items []domain.PendingReminder) []ReminderEntry {

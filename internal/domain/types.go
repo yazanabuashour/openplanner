@@ -328,3 +328,13 @@ type Page[T any] struct {
 	Items      []T
 	NextCursor *string
 }
+
+type ICalendarExport struct {
+	ContentType  string
+	Filename     string
+	CalendarID   string
+	CalendarName string
+	EventCount   int
+	TaskCount    int
+	Content      string
+}

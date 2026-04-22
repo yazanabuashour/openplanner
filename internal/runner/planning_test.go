@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -380,6 +381,163 @@ func TestRunPlanningTaskAllDayEventAndListFiltering(t *testing.T) {
 	}
 	if events.Events[0].StartDate != "2026-04-17" {
 		t.Fatalf("start date = %q, want 2026-04-17", events.Events[0].StartDate)
+	}
+}
+
+func TestRunPlanningTaskExportICalendar(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	count := int32(2)
+	timeZone := "America/New_York"
+
+	workCalendar, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Work Calendar",
+	})
+	if err != nil {
+		t.Fatalf("ensure work calendar: %v", err)
+	}
+	if _, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Personal",
+	}); err != nil {
+		t.Fatalf("ensure personal calendar: %v", err)
+	}
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work Calendar",
+		Title:        "Weekly sync",
+		StartAt:      "2026-03-03T09:00:00-05:00",
+		EndAt:        "2026-03-03T10:00:00-05:00",
+		TimeZone:     &timeZone,
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "weekly", Count: &count},
+		Reminders:    []ReminderRuleRequest{{BeforeMinutes: 30}},
+		Attendees:    []EventAttendeeRequest{{Email: "alex@example.com", DisplayName: "Alex Rivera", Role: "required", ParticipationStatus: "accepted", RSVP: true}},
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	task, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateTask,
+		CalendarName: "Work Calendar",
+		Title:        "Review notes",
+		DueDate:      "2026-03-03",
+		Recurrence:   &RecurrenceRuleRequest{Frequency: "daily", Count: &count},
+		Priority:     "high",
+		Tags:         []string{"planning"},
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	movedEvent, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionRescheduleEventOccurrence,
+		EventID:      event.Events[0].ID,
+		OccurrenceAt: "2026-03-10T09:00:00-04:00",
+		StartAt:      "2026-03-11T11:00:00-04:00",
+	})
+	if err != nil {
+		t.Fatalf("reschedule event occurrence: %v", err)
+	}
+	completedTask, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:         PlanningTaskActionCompleteTask,
+		TaskID:         task.Tasks[0].ID,
+		OccurrenceDate: "2026-03-04",
+	})
+	if err != nil {
+		t.Fatalf("complete task occurrence: %v", err)
+	}
+
+	export, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionExportICalendar,
+		CalendarName: "Work Calendar",
+	})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if export.Rejected || export.ICalendar == nil {
+		t.Fatalf("export result = %#v, want iCalendar payload", export)
+	}
+	if export.ICalendar.ContentType != "text/calendar; charset=utf-8" ||
+		export.ICalendar.Filename != "work-calendar.ics" ||
+		export.ICalendar.CalendarID != workCalendar.Calendars[0].ID ||
+		export.ICalendar.CalendarName != "Work Calendar" ||
+		export.ICalendar.EventCount != 1 ||
+		export.ICalendar.TaskCount != 1 {
+		t.Fatalf("export metadata = %#v", export.ICalendar)
+	}
+	content := strings.ReplaceAll(export.ICalendar.Content, "\r\n ", "")
+	for _, expected := range []string{
+		"BEGIN:VCALENDAR\r\n",
+		"BEGIN:VEVENT\r\n",
+		"BEGIN:VTODO\r\n",
+		"DTSTART;TZID=America/New_York:20260303T090000",
+		"RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=2",
+		"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN=\"Alex Rivera\":mailto:alex@example.com",
+		"TRIGGER:-PT30M",
+		"EXDATE;TZID=America/New_York:20260310T090000",
+		"RECURRENCE-ID;TZID=America/New_York:20260310T090000",
+		"DUE;VALUE=DATE:20260303",
+		"PRIORITY:1",
+		"STATUS:COMPLETED",
+		"RECURRENCE-ID;VALUE=DATE:20260304",
+		"X-OPENPLANNER-OCCURRENCE-KEY:" + movedEvent.Writes[0].OccurrenceKey,
+		"X-OPENPLANNER-OCCURRENCE-KEY:" + completedTask.Writes[0].OccurrenceKey,
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("export content missing %q:\n%s", expected, content)
+		}
+	}
+
+	all, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionExportICalendar})
+	if err != nil {
+		t.Fatalf("export all: %v", err)
+	}
+	if all.Rejected || all.ICalendar == nil || all.ICalendar.Filename != "openplanner.ics" || all.ICalendar.EventCount != 1 || all.ICalendar.TaskCount != 1 {
+		t.Fatalf("all export = %#v", all)
+	}
+}
+
+func TestRunPlanningTaskExportICalendarFiltersAndRejections(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+
+	calendar, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionEnsureCalendar,
+		CalendarName: "Work",
+	})
+	if err != nil {
+		t.Fatalf("ensure calendar: %v", err)
+	}
+	byID, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:     PlanningTaskActionExportICalendar,
+		CalendarID: calendar.Calendars[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("export by id: %v", err)
+	}
+	if byID.Rejected || byID.ICalendar == nil || byID.ICalendar.CalendarName != "Work" {
+		t.Fatalf("by id export = %#v", byID)
+	}
+
+	tests := []PlanningTaskRequest{
+		{Action: PlanningTaskActionExportICalendar, CalendarID: "not-a-ulid"},
+		{Action: PlanningTaskActionExportICalendar, CalendarName: "Missing"},
+		{Action: PlanningTaskActionExportICalendar, CalendarID: calendar.Calendars[0].ID, CalendarName: "Work"},
+		{Action: PlanningTaskActionExportICalendar, From: "2026-04-16T00:00:00Z"},
+	}
+	for _, request := range tests {
+		result, err := RunPlanningTask(ctx, options, request)
+		if err != nil {
+			t.Fatalf("RunPlanningTask(%#v): %v", request, err)
+		}
+		if !result.Rejected || result.RejectionReason == "" {
+			t.Fatalf("result = %#v, want rejection for %#v", result, request)
+		}
 	}
 }
 

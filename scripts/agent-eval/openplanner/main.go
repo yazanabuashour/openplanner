@@ -1635,7 +1635,7 @@ func scenarios() []scenario {
 		{ID: "monthly-recurrence-by-month-day", Title: "Create monthly recurrence by month day", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Pay rent due on 2026-01-31 recurring monthly on the 31st for 3 occurrences. Then tell me the recurrence stored."},
 		{ID: "task-metadata-create", Title: "Create task priority, status, and tags", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. Then tell me the stored priority, status, and tags."},
 		{ID: "migration-style-copy", Title: "Copy selected source calendar data into a destination calendar", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Copy the Legacy calendar items titled Team sync and Review notes into the Work calendar, leaving the Legacy items in place. Then tell me what was copied."},
-		{ID: "unsupported-import-export", Title: "Reject import/export before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please export my local OpenPlanner calendar to an iCalendar .ics file and import an iCalendar file into OpenPlanner. If the production OpenPlanner skill does not support import or export yet, say that directly without switching interfaces."},
+		{ID: "unsupported-import", Title: "Reject iCalendar import before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please import an iCalendar .ics file into OpenPlanner. If the production OpenPlanner skill does not support import yet, say that directly without switching interfaces."},
 		{ID: "reminder-create-query-dismiss", Title: "Create, query, and dismiss a reminder", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal OpenPlanner task titled Take medicine due at 2026-04-16T10:00:00Z with a reminder one hour before. Then list pending reminders from 2026-04-16T08:00:00Z to 2026-04-16T10:00:00Z, dismiss the reminder you created, and tell me that no pending reminder remains in that range."},
 		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
 			{Prompt: "Please add a local OpenPlanner Personal task titled Review notes due 04/16. There is no year context in this conversation or my request."},
@@ -1912,8 +1912,8 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyReminderCreateQueryDismiss(dbPath, finalMessage)
 	case "migration-style-copy":
 		return verifyMigrationCopy(dbPath, finalMessage)
-	case "unsupported-import-export":
-		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "export", "icalendar", "ics"})
+	case "unsupported-import":
+		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "icalendar", "ics"})
 	case "ambiguous-short-date":
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"year"})
 	case "year-first-slash-date":

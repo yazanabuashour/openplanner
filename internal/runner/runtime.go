@@ -276,6 +276,17 @@ func (runtime *localRuntime) ListTasks(ctx context.Context, params domain.TaskLi
 	return service.ListTasks(params)
 }
 
+func (runtime *localRuntime) ExportICalendar(ctx context.Context, calendarID string) (domain.ICalendarExport, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.ICalendarExport{}, err
+	}
+	return service.ExportICalendar(calendarID)
+}
+
 func (runtime *localRuntime) CreateEventTaskLink(ctx context.Context, eventID string, taskID string) (domain.EventTaskLink, error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.EventTaskLink{}, err

@@ -42,8 +42,8 @@ The expanded production gate adds:
 - migration-style workflows that recreate selected source calendar data through
   runner actions
 - multi-turn disambiguation that requires a clarification before writing
-- future-surface unsupported gates for import/export until those JSON runner
-  features land
+- future-surface unsupported gates for import until that JSON runner feature
+  lands
 
 Unsupported gates become positive gates when their corresponding runner actions
 or fields are implemented. The production skill remains the only model-visible

@@ -45,6 +45,7 @@ Supported routine actions are:
 - `complete_task`
 - `list_pending_reminders`
 - `dismiss_reminder`
+- `export_icalendar`
 - `validate`
 
 For event and task creation, prefer `calendar_name`. The runner ensures that
@@ -73,9 +74,10 @@ and task titles can be changed but cannot be cleared.
 
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
-user explicitly asks for one. Import/export is not supported until the installed
-JSON runner ships those actions. Event `time_zone` is the runner field future
-iCalendar import/export work will map to and from `TZID`.
+user explicitly asks for one. iCalendar export is supported through
+`export_icalendar`, which returns `.ics` text in JSON; iCalendar import is not
+supported yet. Event `time_zone` maps to iCalendar `TZID` during export and
+future import work.
 
 Tasks support metadata. Use `priority` values `low`, `medium`, or `high`;
 `status` values `todo`, `in_progress`, or `done`; and `tags` as lowercase labels
@@ -137,7 +139,7 @@ checkout.
 
 Pipe one JSON request to `openplanner planning` and answer only from JSON
 `writes`, `calendars`, `events`, `tasks`, `agenda`, `reminders`,
-`event_task_links`, or
+`event_task_links`, `icalendar`, or
 `rejection_reason`. Agenda results are already chronologically ordered. Pending
 reminder results are already chronologically ordered.
 
@@ -205,7 +207,13 @@ Lists:
 {"action":"list_tasks","calendar_name":"Work","priority":"high","status":"in_progress","tags":["planning","review"],"limit":10}
 {"action":"list_pending_reminders","from":"2026-04-16T08:00:00Z","to":"2026-04-16T10:00:00Z","limit":10}
 {"action":"dismiss_reminder","reminder_occurrence_id":"<id-from-list-pending-reminders-result>"}
+{"action":"export_icalendar"}
+{"action":"export_icalendar","calendar_name":"Work"}
 ```
+
+For export results, use `icalendar.content_type`, `icalendar.filename`,
+`icalendar.event_count`, `icalendar.task_count`, and `icalendar.content`.
+The runner returns complete `.ics` text in JSON and does not write files.
 
 Deletes:
 
