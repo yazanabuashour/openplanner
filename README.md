@@ -75,7 +75,8 @@ request, performs the local planning operation, and writes structured JSON to
 stdout. By default, it stores SQLite data at
 `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Override the path
 with `OPENPLANNER_DATABASE_PATH` or `openplanner planning --db <path>`; `--db`
-wins when both are present.
+wins when both are present. See [docs/local-data-backup.md](docs/local-data-backup.md)
+for backup, restore, and recovery verification guidance for local data.
 
 Supported routine actions are:
 
@@ -246,6 +247,7 @@ or install from `main`.
 - [SECURITY.md](SECURITY.md) explains how to report vulnerabilities privately and what response timing to expect.
 - [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
 - [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
+- [docs/local-data-backup.md](docs/local-data-backup.md) explains backup, restore, and recovery checks for local OpenPlanner data.
 - [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows.
 - [internal/runner](internal/runner) contains the JSON-friendly task facade for production agent workflows.
 - [cmd/openplanner](cmd/openplanner) contains the installed JSON runner.

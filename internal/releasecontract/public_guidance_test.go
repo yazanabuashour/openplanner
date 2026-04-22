@@ -99,6 +99,46 @@ func TestProductSurfaceGuidanceIsPresent(t *testing.T) {
 	}
 }
 
+func TestLocalDataBackupGuidanceIsPresent(t *testing.T) {
+	t.Parallel()
+
+	required := map[string][]string{
+		"../../README.md": {
+			"docs/local-data-backup.md",
+			"backup, restore, and recovery verification guidance",
+		},
+		"../../docs/local-data-backup.md": {
+			"# Local Data Backup And Recovery",
+			"${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db",
+			"openplanner planning --db <database-path>` wins over",
+			"OPENPLANNER_DATABASE_PATH",
+			"Stop active OpenPlanner runner usage",
+			"cp -p <database-path>",
+			"mv <database-path> <database-path>.before-restore",
+			`printf '%s\n' '{"action":"validate"}' | openplanner planning --db <restored-db>`,
+			`"action":"list_agenda"`,
+			`"action":"list_events"`,
+			`"action":"list_tasks"`,
+			"Do not edit local OpenPlanner data through SQLite directly",
+			"Use `export_icalendar` and `import_icalendar`",
+			"database-file backup and restore",
+		},
+	}
+
+	for file, phrases := range required {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := string(content)
+		for _, phrase := range phrases {
+			if !strings.Contains(text, phrase) {
+				t.Fatalf("%s missing local-data backup guidance %q", file, phrase)
+			}
+		}
+	}
+}
+
 func TestMaintainerAgentsFileDoesNotCarryProductTaskPolicy(t *testing.T) {
 	t.Parallel()
 
