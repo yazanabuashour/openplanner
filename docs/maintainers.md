@@ -8,6 +8,11 @@ an Agent Skills-compatible skill, and release integrity metadata. There is still
 no hosted service, no auth-backed product surface, no background daemon, and no
 package registry. Keep maintainer docs honest about that status.
 
+Local calendar and task data is sensitive user data. Keep the threat model and
+hardening blockers in [`docs/local-data-security.md`](local-data-security.md)
+aligned with changes to the runner, SQLite storage, iCalendar import/export,
+filesystem path handling, and the experimental CalDAV adapter.
+
 ## Product surface decision
 
 The earlier library-first research direction is superseded for v1 by the

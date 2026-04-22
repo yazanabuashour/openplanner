@@ -4,6 +4,10 @@ OpenPlanner stores local-first planning data in one SQLite database file. Back
 up and restore that file when you need full local recovery of calendars, events,
 tasks, reminders, links, and imported iCalendar data.
 
+See [`docs/local-data-security.md`](local-data-security.md) for the local data
+threat model, sensitive artifact handling, and parser/server hardening
+follow-ups.
+
 ## Database Path
 
 By default, the installed runner stores data at:
@@ -93,3 +97,7 @@ verification.
 Use `export_icalendar` and `import_icalendar` when you need calendar
 interchange. Use database-file backup and restore when you need complete local
 OpenPlanner recovery.
+
+Do not upload local databases, backups, real iCalendar exports, or raw import
+and CalDAV logs to public issues, pull requests, eval artifacts, or release
+assets.

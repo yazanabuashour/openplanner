@@ -1,0 +1,177 @@
+# Local Data Security Review
+
+`op-2vv.18` reviews the security model for local OpenPlanner calendar and task
+data. OpenPlanner is local-first and pre-`1.0`; this review documents the
+current boundary, the data that should be treated as sensitive, the main threat
+scenarios, and the follow-up hardening work that should block broader exposure.
+
+## Security Boundary
+
+OpenPlanner's supported product surface remains the installed
+`openplanner planning` JSON runner plus the portable `skills/openplanner`
+payload. Internal Go packages, the SQLite schema, and the experimental CalDAV
+adapter support that surface but are not public compatibility contracts.
+
+The JSON runner reads one structured JSON request from stdin, validates and
+normalizes it, and reads or writes the selected SQLite database. By default the
+database is stored at the XDG data location documented in
+[`docs/local-data-backup.md`](local-data-backup.md). Callers may override that
+path with `openplanner planning --db <database-path>` or
+`OPENPLANNER_DATABASE_PATH=<database-path>`; `--db` wins when both are present.
+Those path inputs are trusted caller-controlled filesystem inputs. OpenPlanner
+does not sandbox database paths, prevent access to caller-selected locations, or
+provide multi-user access control around local files.
+
+The `import_icalendar` runner action accepts complete `.ics` text in the JSON
+`content` field. It does not read `.ics` files directly. The `export_icalendar`
+action returns complete `.ics` text in JSON and does not write export files.
+Agents and users choose where to store exported content.
+
+The experimental `openplanner caldav` adapter uses the same local SQLite-backed
+service and the same database path precedence rules. It is unauthenticated,
+does not provide TLS, and exists for local compatibility research. It should be
+bound only to loopback addresses such as `127.0.0.1:<port>` and must not be
+promoted to exposed network use until `op-d7k` is complete.
+
+## Sensitive Data
+
+Treat the following as sensitive local planning data:
+
+- SQLite database files and any sidecar files created by SQLite.
+- Backup copies of the database.
+- iCalendar export files or copied export content.
+- Imported `.ics` content and provider migration fixtures before sanitization.
+- Calendar names, event and task titles, descriptions, locations, reminders,
+  attendees, task metadata, recurrence exceptions, links, and completion state.
+- Raw logs from manual import, export, CalDAV, or agent-eval runs when they
+  include user planning content.
+
+Committed docs, reports, and artifacts must use repo-relative paths or neutral
+placeholders such as `<database-path>`, `<backup-dir>`, and `<run-root>`.
+Do not commit personal calendar exports, private email addresses, real attendee
+data, or machine-absolute filesystem paths.
+
+## Threat Model
+
+### Local Data Disclosure
+
+The main confidentiality risk is accidental disclosure of local planning data
+through database files, backups, exports, temp run directories, logs, or copied
+`.ics` payloads. The runner and CalDAV adapter create the data directory with
+private permissions where supported, but database file permissions currently
+depend on SQLite and the process umask. Track explicit file-mode hardening in
+`op-6g9`.
+
+Current mitigations:
+
+- Keep the database in the user's local data directory by default.
+- Document backup and restore through database-file copies in
+  [`docs/local-data-backup.md`](local-data-backup.md).
+- Use neutral artifact placeholders in committed docs and eval reports.
+- Keep provider import fixtures synthetic and covered by tests that reject
+  machine-absolute paths and non-example email markers.
+
+### Integrity Loss
+
+The main integrity risks are destructive or confusing local writes through:
+
+- malformed or hostile `.ics` imports
+- repeat imports that update rows by iCalendar UID within a calendar
+- CalDAV `PUT` and `DELETE`
+- broad delete actions from the JSON runner
+- caller-selected database paths that point at the wrong local file
+
+Current mitigations:
+
+- Runner actions validate required IDs, calendar references, dates, recurrence,
+  attendees, reminders, tags, task metadata, and pagination limits before
+  opening the local database where practical.
+- Calendar deletion is empty-calendar-only and does not cascade to contained
+  events or tasks.
+- iCalendar import skips unsupported components instead of importing ambiguous
+  partial data where validation fails.
+- CalDAV `PUT` only accepts one base `VEVENT` or `VTODO` per request.
+- CalDAV resource resolution is scoped to the requested calendar.
+
+Remaining hardening:
+
+- Add bounded input handling in `op-xge`.
+- Add parser-focused fuzz and regression coverage in `op-5gj`.
+- Keep CalDAV experimental and loopback-only until `op-d7k` is complete.
+
+### Parser And Server Denial Of Service
+
+The highest current denial-of-service risk is local parsing of large or unusual
+JSON, `.ics`, or XML payloads. CalDAV `PUT` currently reads through a limited
+reader, but oversized request handling should be explicit rather than relying
+on truncation and parser failure. CalDAV `PROPFIND` and `REPORT` XML reads also
+need explicit body limits. The JSON runner and `import_icalendar` path need
+documented size and component limits.
+
+Track this work in `op-xge` and parser hardening tests in `op-5gj`.
+
+### Cross-Calendar Leakage
+
+CalDAV listing and object reads expose local calendar data to any client that
+can reach the adapter. Within the adapter, object resolution should remain
+scoped to the target calendar, and `calendar-multiget` requests for missing or
+cross-calendar hrefs should return not-found properties instead of content.
+Existing tests cover those baseline behaviors. Broader access control,
+authentication, and transport decisions belong to `op-d7k`.
+
+### Maintainer And Supply-Chain Security
+
+Security reports are handled through [`SECURITY.md`](../SECURITY.md). Pull
+requests run fork-safe checks, dependency review, tests, `govulncheck`, and
+`golangci-lint` through the workflow described in
+[`docs/maintainers.md`](maintainers.md). Broader recurring security operations
+remain tracked by `op-4wm`, and maintainer isolation remains tracked by
+`op-7tb`.
+
+## Testing Plan
+
+Routine changes that touch local data handling, iCalendar import/export,
+CalDAV, runner validation, or SQLite storage should run:
+
+```bash
+mise exec -- make check
+```
+
+At minimum, security-sensitive changes in this area should run:
+
+```bash
+mise exec -- go test ./...
+mise exec -- golangci-lint run ./...
+```
+
+Use targeted tests for:
+
+- JSON runner rejection before database creation for invalid requests.
+- iCalendar import malformed content, unsupported components, recurrence
+  exceptions, reminders, attendees, task metadata, provider fixtures, and repeat
+  imports.
+- CalDAV discovery, `PROPFIND`, `REPORT`, `calendar-multiget`, `GET`, `HEAD`,
+  `PUT`, `DELETE`, ETags, cross-calendar hrefs, invalid content types, and
+  malformed calendar objects.
+- SQLite migration and local data preservation across schema changes.
+- Documentation policy checks that reject machine-absolute paths in committed
+  docs and reports.
+
+Security-specific follow-ups:
+
+- `op-xge`: bound local planning parser and server inputs.
+- `op-5gj`: add parser hardening fuzz and regression coverage.
+- `op-d7k`: harden CalDAV before non-loopback exposure.
+- `op-6g9`: ensure private permissions for local OpenPlanner data files.
+
+## Operational Guidance
+
+- Prefer the JSON runner for normal local planning work.
+- Keep CalDAV disabled unless actively testing local client compatibility.
+- Bind CalDAV to loopback only.
+- Stop active runner and CalDAV usage before backing up or restoring the
+  database.
+- Store database backups and iCalendar exports only in locations covered by the
+  user's normal encrypted backup process when the planning data is sensitive.
+- Do not upload local databases, backups, raw CalDAV logs, or real `.ics`
+  exports to public issues, pull requests, eval artifacts, or release assets.

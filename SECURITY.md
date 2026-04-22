@@ -21,6 +21,14 @@ Use GitHub private vulnerability reporting from the repository Security tab. Inc
 
 If GitHub private reporting is temporarily unavailable, contact the repository owner through an existing private channel and share only enough detail to establish a private handoff. Do not disclose the vulnerability publicly while that handoff is being arranged.
 
+## Local planning data
+
+OpenPlanner stores calendar and task data locally, and that data can include
+sensitive titles, descriptions, locations, reminders, attendees, task metadata,
+imports, exports, and backups. The local data security model and current
+hardening follow-ups are documented in
+[`docs/local-data-security.md`](docs/local-data-security.md).
+
 ## Response expectations
 
 These are targets, not contractual guarantees:
