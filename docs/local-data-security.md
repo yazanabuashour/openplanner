@@ -59,13 +59,18 @@ data, or machine-absolute filesystem paths.
 The main confidentiality risk is accidental disclosure of local planning data
 through database files, backups, exports, temp run directories, logs, or copied
 `.ics` payloads. The runner and CalDAV adapter create the data directory with
-private permissions where supported, but database file permissions currently
-depend on SQLite and the process umask. Track explicit file-mode hardening in
-`op-6g9`.
+private permissions where supported. OpenPlanner also pre-creates and corrects
+the selected SQLite database file with owner-only permissions on POSIX-style
+filesystems, and corrects SQLite sidecar files such as `-journal`, `-wal`, and
+`-shm` when they exist.
 
 Current mitigations:
 
 - Keep the database in the user's local data directory by default.
+- Use `0700` for OpenPlanner-created data directories and `0600` for local
+  SQLite database and sidecar files on POSIX-style filesystems. Platforms and
+  filesystems without meaningful owner-only mode support may treat those modes
+  as best-effort.
 - Document backup and restore through database-file copies in
   [`docs/local-data-backup.md`](local-data-backup.md).
 - Use neutral artifact placeholders in committed docs and eval reports.
@@ -174,7 +179,6 @@ Security-specific follow-ups:
 
 - `op-5gj`: add parser hardening fuzz and regression coverage.
 - `op-d7k`: enforce loopback-only CalDAV local compatibility mode.
-- `op-6g9`: ensure private permissions for local OpenPlanner data files.
 
 ## Operational Guidance
 

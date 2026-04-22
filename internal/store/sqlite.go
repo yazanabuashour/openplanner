@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/yazanabuashour/openplanner/internal/domain"
+	"github.com/yazanabuashour/openplanner/internal/localdata"
 )
 
 var (
@@ -231,6 +232,10 @@ var migrations = []migration{
 }
 
 func Open(path string) (*Store, error) {
+	if err := localdata.EnsurePrivateSQLiteFiles(path); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -243,6 +248,10 @@ func Open(path string) (*Store, error) {
 
 	store := &Store{db: db}
 	if err := store.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := localdata.HardenSQLiteSidecars(path); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

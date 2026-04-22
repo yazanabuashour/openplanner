@@ -30,6 +30,18 @@ The experimental `openplanner caldav` adapter uses the same database path rules:
 `--db <database-path>` wins over `OPENPLANNER_DATABASE_PATH`, and the default
 path is used when neither override is present.
 
+## File Permissions
+
+On POSIX-style filesystems, OpenPlanner creates or corrects its local data
+directory to `0700` and its SQLite database file to `0600`. SQLite sidecar files
+created next to the database, including `-journal`, `-wal`, and `-shm`, are also
+corrected to `0600` when OpenPlanner sees them.
+
+Platforms and filesystems without meaningful owner-only mode support may treat
+these modes as best-effort. If your planning data is sensitive, keep the
+database and backups in a user-private location covered by your normal encrypted
+backup process.
+
 ## Back Up Data
 
 1. Stop active OpenPlanner runner usage and stop any local CalDAV adapter using
@@ -45,8 +57,9 @@ cp -p <database-path> "$backup"
 ```
 
 `cp -p` preserves the source file mode and timestamps on common POSIX systems.
-Store the backup in a location managed by your normal encrypted backup process
-when the planning data is sensitive.
+Keep `<backup-dir>` private to the local user, and store the backup in a
+location managed by your normal encrypted backup process when the planning data
+is sensitive.
 
 ## Restore Data
 

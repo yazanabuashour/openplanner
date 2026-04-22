@@ -20,6 +20,7 @@ import (
 
 	"github.com/yazanabuashour/openplanner/internal/domain"
 	"github.com/yazanabuashour/openplanner/internal/icalendar"
+	"github.com/yazanabuashour/openplanner/internal/localdata"
 	"github.com/yazanabuashour/openplanner/internal/service"
 	"github.com/yazanabuashour/openplanner/internal/store"
 )
@@ -162,7 +163,11 @@ func Open(options Options) (*runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
+	ensureDatabaseDir := localdata.EnsurePrivateDir
+	if options.DatabasePath != "" {
+		ensureDatabaseDir = localdata.EnsurePrivateDirIfMissing
+	}
+	if err := ensureDatabaseDir(filepath.Dir(databasePath)); err != nil {
 		return nil, fmt.Errorf("create database dir: %w", err)
 	}
 
