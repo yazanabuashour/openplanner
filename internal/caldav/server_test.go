@@ -130,6 +130,78 @@ func TestPropfindDiscoveryAndCollections(t *testing.T) {
 	assertBodyContains(t, collection, "HTTP/1.1 404 Not Found")
 }
 
+func TestPropfindParserHardening(t *testing.T) {
+	server, svc := newTestServer(t)
+	calendar := createCalendar(t, svc)
+
+	tests := []struct {
+		name        string
+		path        string
+		body        string
+		headers     map[string]string
+		wantStatus  int
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:       "empty body defaults to allprop",
+			path:       "/caldav/",
+			wantStatus: 207,
+			contains:   []string{"calendar-home-set", "/caldav/calendars/local/"},
+		},
+		{
+			name:       "malformed xml is rejected",
+			path:       "/caldav/",
+			body:       `<propfind xmlns="DAV:"><prop><displayname/>`,
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid PROPFIND body"},
+		},
+		{
+			name:       "oversized body is rejected",
+			path:       "/caldav/",
+			body:       strings.Repeat("x", maxCalDAVRequestBodyBytes+1),
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid PROPFIND body"},
+		},
+		{
+			name:       "deeply nested xml is rejected",
+			path:       "/caldav/",
+			body:       `<propfind xmlns="DAV:">` + nestedXML("x", maxCalDAVXMLDepth+1, "") + `</propfind>`,
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid PROPFIND body"},
+		},
+		{
+			name:       "unknown property is isolated to not found propstat",
+			path:       calendarHref(calendar.ID),
+			body:       `<propfind xmlns="DAV:"><prop><displayname/><unknown-property/></prop></propfind>`,
+			wantStatus: 207,
+			contains:   []string{"Work", "unknown-property", "HTTP/1.1 404 Not Found"},
+		},
+		{
+			name:       "namespace prefixes are accepted",
+			path:       calendarHref(calendar.ID),
+			body:       `<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><C:supported-calendar-component-set/></D:prop></D:propfind>`,
+			wantStatus: 207,
+			contains:   []string{"Work", "supported-calendar-component-set", "VEVENT", "VTODO"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := request(server, "PROPFIND", test.path, test.body, test.headers)
+			if response.Code != test.wantStatus {
+				t.Fatalf("PROPFIND status = %d, want %d, body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			for _, value := range test.contains {
+				assertBodyContains(t, response, value)
+			}
+			for _, value := range test.notContains {
+				assertBodyNotContains(t, response, value)
+			}
+		})
+	}
+}
+
 func TestGetCalendarObjectReturnsICalendarAndETag(t *testing.T) {
 	server, svc := newTestServer(t)
 	calendar := createCalendar(t, svc)
@@ -315,6 +387,121 @@ func TestCalendarMultigetReportsMissingAndCrossCalendarObjectsAsNotFound(t *test
 		t.Fatalf("body = %s, want two 404 propstats", response.Body.String())
 	}
 	assertBodyNotContains(t, response, "SUMMARY:Other event")
+}
+
+func TestReportParserHardening(t *testing.T) {
+	server, svc := newTestServer(t)
+	calendar := createCalendar(t, svc)
+	otherCalendar, err := svc.CreateCalendar(domain.Calendar{Name: "Other"})
+	if err != nil {
+		t.Fatalf("CreateCalendar(other): %v", err)
+	}
+	start := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Report event",
+		StartAt:    &start,
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+	otherEvent, err := svc.CreateEvent(domain.Event{
+		CalendarID: otherCalendar.ID,
+		Title:      "Other event",
+		StartAt:    &start,
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(other): %v", err)
+	}
+	object := objectHref(calendar.ID, event.ID+".ics")
+	missing := objectHref(calendar.ID, "missing.ics")
+	crossCalendar := objectHref(otherCalendar.ID, otherEvent.ID+".ics")
+
+	tests := []struct {
+		name        string
+		body        string
+		wantStatus  int
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:       "malformed xml is rejected",
+			body:       `<calendar-query xmlns="urn:ietf:params:xml:ns:caldav"><filter>`,
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid REPORT"},
+		},
+		{
+			name: "malformed time range is rejected",
+			body: strings.Join([]string{
+				`<calendar-query xmlns="urn:ietf:params:xml:ns:caldav">`,
+				`<filter><comp-filter name="VCALENDAR"><comp-filter name="VEVENT">`,
+				`<time-range start="not-a-date" end="20260421T000000Z"/>`,
+				`</comp-filter></comp-filter></filter>`,
+				`</calendar-query>`,
+			}, ""),
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid REPORT"},
+		},
+		{
+			name:       "oversized body is rejected",
+			body:       strings.Repeat("x", maxCalDAVRequestBodyBytes+1),
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid REPORT"},
+		},
+		{
+			name:       "deeply nested filter is rejected",
+			body:       `<calendar-query xmlns="urn:ietf:params:xml:ns:caldav">` + nestedXML("comp-filter", maxCalDAVXMLDepth+1, "") + `</calendar-query>`,
+			wantStatus: http.StatusBadRequest,
+			contains:   []string{"invalid REPORT"},
+		},
+		{
+			name:       "unknown requested property is isolated to not found propstat",
+			body:       `<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:X="urn:test"><D:prop><D:getetag/><X:unknown-property/></D:prop><D:href>` + object + `</D:href></C:calendar-multiget>`,
+			wantStatus: 207,
+			contains:   []string{object, "unknown-property", "HTTP/1.1 404 Not Found"},
+		},
+		{
+			name:       "empty calendar query is safe",
+			body:       `<calendar-query xmlns="urn:ietf:params:xml:ns:caldav"/>`,
+			wantStatus: 207,
+			contains:   []string{event.ID + ".ics", "SUMMARY:Report event"},
+		},
+		{
+			name:       "calendar multiget trims href text",
+			body:       `<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:getetag/><C:calendar-data/></D:prop><D:href> ` + object + "\n" + `</D:href></C:calendar-multiget>`,
+			wantStatus: 207,
+			contains:   []string{object, "SUMMARY:Report event"},
+		},
+		{
+			name:        "calendar multiget with no hrefs returns empty multistatus",
+			body:        `<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:getetag/><C:calendar-data/></D:prop></C:calendar-multiget>`,
+			wantStatus:  207,
+			contains:    []string{"multistatus"},
+			notContains: []string{event.ID + ".ics", "SUMMARY:Report event"},
+		},
+		{
+			name:        "missing and cross-calendar hrefs are not found",
+			body:        calendarMultigetBody(missing, crossCalendar),
+			wantStatus:  207,
+			contains:    []string{missing, crossCalendar, "HTTP/1.1 404 Not Found"},
+			notContains: []string{"SUMMARY:Other event"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := request(server, "REPORT", calendarHref(calendar.ID), test.body, nil)
+			if response.Code != test.wantStatus {
+				t.Fatalf("REPORT status = %d, want %d, body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			for _, value := range test.contains {
+				assertBodyContains(t, response, value)
+			}
+			for _, value := range test.notContains {
+				assertBodyNotContains(t, response, value)
+			}
+		})
+	}
 }
 
 func TestCalendarObjectETagsAreStableAcrossUnchangedSyncReads(t *testing.T) {
@@ -592,6 +779,89 @@ func calendarMultigetBody(hrefs ...string) string {
 		builder.WriteString(`</D:href>`)
 	}
 	builder.WriteString(`</C:calendar-multiget>`)
+	return builder.String()
+}
+
+func FuzzParsePropfind(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		`<propfind xmlns="DAV:"><allprop/></propfind>`,
+		`<propfind xmlns="DAV:"><prop><displayname/><unknown-property/></prop></propfind>`,
+		`<D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>`,
+		`<propfind xmlns="DAV:"><prop><displayname/>`,
+		`<propfind xmlns="DAV:">` + nestedXML("x", 8, "") + `</propfind>`,
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, content string) {
+		allProperties, requested, err := parsePropfind(strings.NewReader(content))
+		if err != nil {
+			return
+		}
+		if allProperties && len(requested) != 0 {
+			t.Fatalf("allProperties with requested properties: %#v", requested)
+		}
+		if !allProperties && len(requested) == 0 {
+			t.Fatal("specific propfind returned no requested properties")
+		}
+		for _, name := range requested {
+			if strings.TrimSpace(name.Local) == "" {
+				t.Fatalf("requested property has empty local name: %#v", name)
+			}
+		}
+	})
+}
+
+func FuzzParseReport(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		`<calendar-query xmlns="urn:ietf:params:xml:ns:caldav"/>`,
+		`<calendar-query xmlns="urn:ietf:params:xml:ns:caldav"><filter><comp-filter name="VCALENDAR"><comp-filter name="VEVENT"><time-range start="20260420T000000Z" end="20260421T000000Z"/></comp-filter></comp-filter></filter></calendar-query>`,
+		`<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:getetag/><C:calendar-data/></D:prop><D:href>/caldav/calendars/local/calendar/event.ics</D:href></C:calendar-multiget>`,
+		`<calendar-query xmlns="urn:ietf:params:xml:ns:caldav"><filter>`,
+		`<calendar-query xmlns="urn:ietf:params:xml:ns:caldav">` + nestedXML("comp-filter", 8, "") + `</calendar-query>`,
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, content string) {
+		report, err := parseReport(strings.NewReader(content))
+		if err != nil {
+			return
+		}
+		if report.kind != reportCalendarQuery && report.kind != reportCalendarMultiget {
+			t.Fatalf("unknown report kind: %v", report.kind)
+		}
+		for _, name := range report.requested {
+			if strings.TrimSpace(name.Local) == "" {
+				t.Fatalf("requested property has empty local name: %#v", name)
+			}
+		}
+		for _, href := range report.hrefs {
+			if strings.TrimSpace(href) == "" {
+				t.Fatalf("empty href survived parsing: %#v", report.hrefs)
+			}
+		}
+		if report.query.hasTimeRange && !report.query.to.After(report.query.from) {
+			t.Fatalf("invalid time range: from=%s to=%s", report.query.from, report.query.to)
+		}
+	})
+}
+
+func nestedXML(name string, depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString("<")
+		builder.WriteString(name)
+		builder.WriteString(">")
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteString("</")
+		builder.WriteString(name)
+		builder.WriteString(">")
+	}
 	return builder.String()
 }
 

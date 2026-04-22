@@ -338,6 +338,210 @@ func TestParseImportRejectsMalformedAndSkipsUnsupportedComponents(t *testing.T) 
 	}
 }
 
+func TestParseImportParserHardening(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantErr    bool
+		allowErr   bool
+		wantEvents int
+		wantTasks  int
+		wantSkips  int
+	}{
+		{
+			name:    "malformed calendar text",
+			content: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:bad@example.com\r\nEND:VCALENDAR",
+			wantErr: true,
+		},
+		{
+			name: "unknown calendar and component properties are ignored",
+			content: testICalendar(
+				"X-UNKNOWN-CALENDAR-PROP:ignored",
+				"BEGIN:VEVENT",
+				"UID:unknown-props@example.com",
+				"SUMMARY:Unknown props",
+				"DTSTART;VALUE=DATE:20260420",
+				"X-UNKNOWN-EVENT-PROP:ignored",
+				"END:VEVENT",
+			),
+			wantEvents: 1,
+		},
+		{
+			name: "oversized property value stays bounded and parses",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:large-description@example.com",
+				"SUMMARY:Large description",
+				"DESCRIPTION:"+strings.Repeat("large description ", 1<<16),
+				"DTSTART;VALUE=DATE:20260420",
+				"END:VEVENT",
+			),
+			wantEvents: 1,
+		},
+		{
+			name: "unsupported recurrence is skipped",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:unsupported-rrule@example.com",
+				"SUMMARY:Unsupported recurrence",
+				"DTSTART;VALUE=DATE:20260420",
+				"RRULE:FREQ=HOURLY;COUNT=2",
+				"END:VEVENT",
+			),
+			wantSkips: 1,
+		},
+		{
+			name: "malformed date is skipped",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:bad-date@example.com",
+				"SUMMARY:Bad date",
+				"DTSTART;VALUE=DATE:20261340",
+				"END:VEVENT",
+			),
+			wantSkips: 1,
+		},
+		{
+			name: "invalid attendee is skipped",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:bad-attendee@example.com",
+				"SUMMARY:Bad attendee",
+				"DTSTART;VALUE=DATE:20260420",
+				"ATTENDEE:mailto:bad@@example.com",
+				"END:VEVENT",
+			),
+			wantSkips: 1,
+		},
+		{
+			name: "bad component does not corrupt valid component",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:valid@example.com",
+				"SUMMARY:Valid event",
+				"DTSTART;VALUE=DATE:20260420",
+				"END:VEVENT",
+				"BEGIN:VEVENT",
+				"UID:bad-zone@example.com",
+				"SUMMARY:Bad zone",
+				"DTSTART;TZID=No/Such_Zone:20260420T090000",
+				"END:VEVENT",
+			),
+			wantEvents: 1,
+			wantSkips:  1,
+		},
+		{
+			name: "nested unusual component fails safely",
+			content: testICalendar(
+				"BEGIN:VEVENT",
+				"UID:nested-event@example.com",
+				"SUMMARY:Nested event",
+				"DTSTART;VALUE=DATE:20260420",
+				"BEGIN:VTODO",
+				"UID:nested-task@example.com",
+				"SUMMARY:Nested task",
+				"DUE;VALUE=DATE:20260421",
+				"END:VTODO",
+				"END:VEVENT",
+			),
+			allowErr:   true,
+			wantEvents: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := ParseImport(test.content)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("ParseImport() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				if test.allowErr {
+					return
+				}
+				t.Fatalf("ParseImport(): %v", err)
+			}
+			assertParsedImportSafe(t, parsed)
+			if len(parsed.Events) != test.wantEvents {
+				t.Fatalf("events = %d, want %d; parsed = %#v", len(parsed.Events), test.wantEvents, parsed)
+			}
+			if len(parsed.Tasks) != test.wantTasks {
+				t.Fatalf("tasks = %d, want %d; parsed = %#v", len(parsed.Tasks), test.wantTasks, parsed)
+			}
+			if len(parsed.Skips) != test.wantSkips {
+				t.Fatalf("skips = %d, want %d; parsed = %#v", len(parsed.Skips), test.wantSkips, parsed)
+			}
+		})
+	}
+}
+
+func FuzzParseImport(f *testing.F) {
+	for _, seed := range []string{
+		testICalendar(
+			"BEGIN:VEVENT",
+			"UID:fuzz-event@example.com",
+			"SUMMARY:Fuzz event",
+			"DTSTART;VALUE=DATE:20260420",
+			"END:VEVENT",
+		),
+		testICalendar(
+			"BEGIN:VTODO",
+			"UID:fuzz-task@example.com",
+			"SUMMARY:Fuzz task",
+			"DUE;VALUE=DATE:20260420",
+			"END:VTODO",
+		),
+		"not an ics file",
+		testICalendar("X-WR-CALNAME:Fuzz", "X-UNKNOWN:ignored"),
+		testICalendar(
+			"BEGIN:VEVENT",
+			"UID:bad-date@example.com",
+			"SUMMARY:Bad date",
+			"DTSTART;VALUE=DATE:20261340",
+			"END:VEVENT",
+		),
+		testICalendar(
+			"BEGIN:VEVENT",
+			"UID:bad-rrule@example.com",
+			"SUMMARY:Bad rrule",
+			"DTSTART;VALUE=DATE:20260420",
+			"RRULE:FREQ=DAILY;COUNT=bad",
+			"END:VEVENT",
+		),
+		testICalendar(
+			"BEGIN:VEVENT",
+			"UID:nested@example.com",
+			"SUMMARY:Nested",
+			"DTSTART;VALUE=DATE:20260420",
+			"BEGIN:VALARM",
+			"TRIGGER:-PT5M",
+			"END:VALARM",
+			"END:VEVENT",
+		),
+		testICalendar(
+			"BEGIN:VEVENT",
+			"UID:large@example.com",
+			"SUMMARY:Large",
+			"DESCRIPTION:"+strings.Repeat("x", 4096),
+			"DTSTART;VALUE=DATE:20260420",
+			"END:VEVENT",
+		),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, content string) {
+		parsed, err := ParseImport(content)
+		if err != nil {
+			return
+		}
+		assertParsedImportSafe(t, parsed)
+	})
+}
+
 func TestParseImportProviderFixtures(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -531,6 +735,43 @@ func TestProviderFixtureFilesAreSafeToCommit(t *testing.T) {
 
 func unfold(content string) string {
 	return strings.ReplaceAll(content, "\r\n ", "")
+}
+
+func testICalendar(lines ...string) string {
+	content := []string{"BEGIN:VCALENDAR", "VERSION:2.0"}
+	content = append(content, lines...)
+	content = append(content, "END:VCALENDAR")
+	return strings.Join(content, "\r\n")
+}
+
+func assertParsedImportSafe(t *testing.T, parsed ParsedImport) {
+	t.Helper()
+
+	for _, event := range parsed.Events {
+		if strings.TrimSpace(event.UID) == "" || strings.TrimSpace(event.Event.Title) == "" {
+			t.Fatalf("unsafe parsed event = %#v", event)
+		}
+	}
+	for _, event := range parsed.EventChanges {
+		if strings.TrimSpace(event.UID) == "" {
+			t.Fatalf("unsafe parsed event change = %#v", event)
+		}
+	}
+	for _, task := range parsed.Tasks {
+		if strings.TrimSpace(task.UID) == "" || strings.TrimSpace(task.Task.Title) == "" {
+			t.Fatalf("unsafe parsed task = %#v", task)
+		}
+	}
+	for _, task := range parsed.TaskChanges {
+		if strings.TrimSpace(task.UID) == "" {
+			t.Fatalf("unsafe parsed task change = %#v", task)
+		}
+	}
+	for _, skip := range parsed.Skips {
+		if strings.TrimSpace(skip.Kind) == "" || strings.TrimSpace(skip.Reason) == "" {
+			t.Fatalf("unsafe parsed skip = %#v", skip)
+		}
+	}
 }
 
 func assertContains(t *testing.T, content string, expected string) {

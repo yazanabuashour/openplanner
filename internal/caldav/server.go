@@ -28,8 +28,10 @@ const (
 	defaultDatabaseName = "openplanner.db"
 	defaultAddr         = "127.0.0.1:8080"
 
-	davNamespace    = "DAV:"
-	caldavNamespace = "urn:ietf:params:xml:ns:caldav"
+	davNamespace              = "DAV:"
+	caldavNamespace           = "urn:ietf:params:xml:ns:caldav"
+	maxCalDAVRequestBodyBytes = 2 << 20
+	maxCalDAVXMLDepth         = 64
 )
 
 type Options struct {
@@ -565,7 +567,7 @@ func (server *Server) queryObjects(calendarID string, query calendarQuery) ([]se
 }
 
 func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
-	content, err := io.ReadAll(reader)
+	content, err := readLimitedRequestBody(reader, maxCalDAVRequestBodyBytes)
 	if err != nil {
 		return false, nil, err
 	}
@@ -574,6 +576,7 @@ func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
 	}
 
 	decoder := xml.NewDecoder(bytes.NewReader(content))
+	depth := 0
 	inProp := false
 	requested := []xml.Name{}
 	for {
@@ -586,6 +589,10 @@ func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
 		}
 		switch value := token.(type) {
 		case xml.StartElement:
+			depth++
+			if depth > maxCalDAVXMLDepth {
+				return false, nil, fmt.Errorf("xml depth exceeds %d", maxCalDAVXMLDepth)
+			}
 			switch {
 			case value.Name.Local == "allprop" || value.Name.Local == "propname":
 				return true, nil, nil
@@ -598,6 +605,9 @@ func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
 			if value.Name.Local == "prop" {
 				inProp = false
 			}
+			if depth > 0 {
+				depth--
+			}
 		}
 	}
 	if len(requested) == 0 {
@@ -607,7 +617,7 @@ func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
 }
 
 func parseReport(reader io.Reader) (reportRequest, error) {
-	content, err := io.ReadAll(reader)
+	content, err := readLimitedRequestBody(reader, maxCalDAVRequestBodyBytes)
 	if err != nil {
 		return reportRequest{}, err
 	}
@@ -617,6 +627,7 @@ func parseReport(reader io.Reader) (reportRequest, error) {
 
 	report := reportRequest{kind: reportCalendarQuery}
 	decoder := xml.NewDecoder(bytes.NewReader(content))
+	depth := 0
 	componentStack := []string{}
 	propDepth := -1
 	inHref := false
@@ -631,6 +642,10 @@ func parseReport(reader io.Reader) (reportRequest, error) {
 
 		switch value := token.(type) {
 		case xml.StartElement:
+			depth++
+			if depth > maxCalDAVXMLDepth {
+				return reportRequest{}, fmt.Errorf("xml depth exceeds %d", maxCalDAVXMLDepth)
+			}
 			switch value.Name.Local {
 			case "calendar-query":
 				report.kind = reportCalendarQuery
@@ -689,9 +704,23 @@ func parseReport(reader io.Reader) (reportRequest, error) {
 			if value.Name.Local == "href" {
 				inHref = false
 			}
+			if depth > 0 {
+				depth--
+			}
 		}
 	}
 	return report, nil
+}
+
+func readLimitedRequestBody(reader io.Reader, limit int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > limit {
+		return nil, fmt.Errorf("request body exceeds %d bytes", limit)
+	}
+	return content, nil
 }
 
 func calendarObjectProperties(export domain.ICalendarExport) []propertyValue {
