@@ -43,6 +43,7 @@ const (
 	PlanningTaskActionListReminders             = "list_pending_reminders"
 	PlanningTaskActionDismissReminder           = "dismiss_reminder"
 	PlanningTaskActionExportICalendar           = "export_icalendar"
+	PlanningTaskActionImportICalendar           = "import_icalendar"
 	PlanningTaskActionValidate                  = "validate"
 )
 
@@ -83,6 +84,7 @@ type PlanningTaskRequest struct {
 	To                   string                 `json:"to,omitempty"`
 	Cursor               string                 `json:"cursor,omitempty"`
 	Limit                *int                   `json:"limit,omitempty"`
+	Content              string                 `json:"content,omitempty"`
 
 	CalendarPatch domain.CalendarPatch `json:"-"`
 	EventPatch    domain.EventPatch    `json:"-"`
@@ -112,18 +114,19 @@ type EventAttendeeRequest struct {
 }
 
 type PlanningTaskResult struct {
-	Rejected        bool                 `json:"rejected"`
-	RejectionReason string               `json:"rejection_reason,omitempty"`
-	Writes          []PlanningWrite      `json:"writes,omitempty"`
-	Calendars       []CalendarEntry      `json:"calendars,omitempty"`
-	Events          []EventEntry         `json:"events,omitempty"`
-	Tasks           []TaskEntry          `json:"tasks,omitempty"`
-	Agenda          []AgendaEntry        `json:"agenda,omitempty"`
-	Reminders       []ReminderEntry      `json:"reminders,omitempty"`
-	EventTaskLinks  []EventTaskLinkEntry `json:"event_task_links,omitempty"`
-	ICalendar       *ICalendarEntry      `json:"icalendar,omitempty"`
-	NextCursor      string               `json:"next_cursor,omitempty"`
-	Summary         string               `json:"summary"`
+	Rejected        bool                  `json:"rejected"`
+	RejectionReason string                `json:"rejection_reason,omitempty"`
+	Writes          []PlanningWrite       `json:"writes,omitempty"`
+	Calendars       []CalendarEntry       `json:"calendars,omitempty"`
+	Events          []EventEntry          `json:"events,omitempty"`
+	Tasks           []TaskEntry           `json:"tasks,omitempty"`
+	Agenda          []AgendaEntry         `json:"agenda,omitempty"`
+	Reminders       []ReminderEntry       `json:"reminders,omitempty"`
+	EventTaskLinks  []EventTaskLinkEntry  `json:"event_task_links,omitempty"`
+	ICalendar       *ICalendarEntry       `json:"icalendar,omitempty"`
+	ICalendarImport *ICalendarImportEntry `json:"icalendar_import,omitempty"`
+	NextCursor      string                `json:"next_cursor,omitempty"`
+	Summary         string                `json:"summary"`
 }
 
 type PlanningWrite struct {
@@ -213,6 +216,22 @@ type ICalendarEntry struct {
 	Content      string `json:"content"`
 }
 
+type ICalendarImportEntry struct {
+	CalendarCount int                        `json:"calendar_count"`
+	EventCount    int                        `json:"event_count"`
+	TaskCount     int                        `json:"task_count"`
+	CreatedCount  int                        `json:"created_count"`
+	UpdatedCount  int                        `json:"updated_count"`
+	SkippedCount  int                        `json:"skipped_count"`
+	Skips         []ICalendarImportSkipEntry `json:"skips,omitempty"`
+}
+
+type ICalendarImportSkipEntry struct {
+	Kind   string `json:"kind"`
+	UID    string `json:"uid,omitempty"`
+	Reason string `json:"reason"`
+}
+
 type ReminderRuleEntry struct {
 	ID            string `json:"id"`
 	BeforeMinutes int32  `json:"before_minutes"`
@@ -271,6 +290,7 @@ type normalizedPlanningTaskRequest struct {
 	EventTaskLinkFilter  domain.EventTaskLinkFilter
 	AgendaOptions        domain.AgendaParams
 	ReminderOptions      domain.ReminderQueryParams
+	ICalendarImport      domain.ICalendarImportRequest
 	TaskID               string
 	ReminderOccurrenceID string
 	OccurrenceMutation   domain.OccurrenceMutationRequest
@@ -351,6 +371,7 @@ var knownPlanningTaskFields = map[string]bool{
 	"to":                     true,
 	"cursor":                 true,
 	"limit":                  true,
+	"content":                true,
 }
 
 func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRequest) {
@@ -596,6 +617,8 @@ func runPlanningTask(ctx context.Context, api *localRuntime, request normalizedP
 		return runDismissReminder(ctx, api, request)
 	case PlanningTaskActionExportICalendar:
 		return runExportICalendar(ctx, api, request)
+	case PlanningTaskActionImportICalendar:
+		return runImportICalendar(ctx, api, request)
 	default:
 		return rejectedResult(fmt.Sprintf("unsupported planning task action %q", request.Action)), nil
 	}
@@ -970,6 +993,19 @@ func runExportICalendar(ctx context.Context, api *localRuntime, request normaliz
 	}, nil
 }
 
+func runImportICalendar(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
+	imported, err := api.ImportICalendar(ctx, request.ICalendarImport)
+	if err != nil {
+		return PlanningTaskResult{}, err
+	}
+	entry := iCalendarImportEntry(imported)
+	return PlanningTaskResult{
+		Writes:          importWrites(imported.Writes),
+		ICalendarImport: &entry,
+		Summary:         importICalendarSummary(imported),
+	}, nil
+}
+
 func runCompleteTask(ctx context.Context, api *localRuntime, request normalizedPlanningTaskRequest) (PlanningTaskResult, error) {
 	completion, err := api.CompleteTask(ctx, request.TaskID, request.Completion)
 	if err != nil {
@@ -1335,6 +1371,22 @@ func normalizePlanningTaskRequest(request PlanningTaskRequest) (normalizedPlanni
 		}
 		if rejection := normalizeOptionalCalendarFilter(request, &normalized); rejection != "" {
 			return normalizedPlanningTaskRequest{}, rejection
+		}
+		return normalized, ""
+	case PlanningTaskActionImportICalendar:
+		if strings.TrimSpace(request.From) != "" || strings.TrimSpace(request.To) != "" || strings.TrimSpace(request.Cursor) != "" || request.Limit != nil {
+			return normalizedPlanningTaskRequest{}, "import_icalendar does not accept from, to, cursor, or limit"
+		}
+		if strings.TrimSpace(request.Content) == "" {
+			return normalizedPlanningTaskRequest{}, "content is required"
+		}
+		if rejection := normalizeOptionalCalendarFilter(request, &normalized); rejection != "" {
+			return normalizedPlanningTaskRequest{}, rejection
+		}
+		normalized.ICalendarImport = domain.ICalendarImportRequest{
+			Content:      request.Content,
+			CalendarID:   normalized.CalendarID,
+			CalendarName: normalized.CalendarName,
 		}
 		return normalized, ""
 	default:
@@ -2632,11 +2684,60 @@ func iCalendarEntry(export domain.ICalendarExport) ICalendarEntry {
 	}
 }
 
+func iCalendarImportEntry(imported domain.ICalendarImport) ICalendarImportEntry {
+	return ICalendarImportEntry{
+		CalendarCount: imported.CalendarCount,
+		EventCount:    imported.EventCount,
+		TaskCount:     imported.TaskCount,
+		CreatedCount:  imported.CreatedCount,
+		UpdatedCount:  imported.UpdatedCount,
+		SkippedCount:  imported.SkippedCount,
+		Skips:         iCalendarImportSkipEntries(imported.Skips),
+	}
+}
+
+func iCalendarImportSkipEntries(skips []domain.ICalendarImportSkip) []ICalendarImportSkipEntry {
+	if len(skips) == 0 {
+		return nil
+	}
+	out := make([]ICalendarImportSkipEntry, 0, len(skips))
+	for _, skip := range skips {
+		out = append(out, ICalendarImportSkipEntry{
+			Kind:   skip.Kind,
+			UID:    skip.UID,
+			Reason: skip.Reason,
+		})
+	}
+	return out
+}
+
+func importWrites(writes []domain.ICalendarImportWrite) []PlanningWrite {
+	if len(writes) == 0 {
+		return nil
+	}
+	out := make([]PlanningWrite, 0, len(writes))
+	for _, write := range writes {
+		out = append(out, PlanningWrite{
+			Kind:          write.Kind,
+			ID:            write.ID,
+			Status:        write.Status,
+			Name:          write.Name,
+			Title:         write.Title,
+			OccurrenceKey: write.OccurrenceKey,
+		})
+	}
+	return out
+}
+
 func exportICalendarSummary(export domain.ICalendarExport) string {
 	if export.CalendarID != "" {
 		return "exported 1 calendar to iCalendar"
 	}
 	return fmt.Sprintf("exported %d events and %d tasks", export.EventCount, export.TaskCount)
+}
+
+func importICalendarSummary(imported domain.ICalendarImport) string {
+	return fmt.Sprintf("imported %d events and %d tasks (%d created, %d updated, %d skipped)", imported.EventCount, imported.TaskCount, imported.CreatedCount, imported.UpdatedCount, imported.SkippedCount)
 }
 
 func reminderEntries(items []domain.PendingReminder) []ReminderEntry {

@@ -25,7 +25,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"event_attendees",
@@ -33,6 +33,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"event_task_links",
 		"event_task_links_task_idx",
 		"events",
+		"events_calendar_ical_uid_idx",
 		"events_calendar_idx",
 		"recurrence_occurrence_states",
 		"recurrence_occurrence_states_owner_idx",
@@ -42,6 +43,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"schema_migrations",
 		"task_occurrence_states",
 		"tasks",
+		"tasks_calendar_ical_uid_idx",
 		"tasks_calendar_idx",
 		"tasks_calendar_status_priority_idx",
 		"tasks_priority_idx",
@@ -61,6 +63,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"created_at",
 		"updated_at",
 		"time_zone",
+		"ical_uid",
 	})
 }
 
@@ -80,7 +83,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -156,7 +159,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6, 7})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -179,7 +182,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (8);
+		INSERT INTO schema_migrations (version) VALUES (9);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -192,7 +195,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 8 is newer than supported version 7") {
+	if !strings.Contains(err.Error(), "database schema version 9 is newer than supported version 8") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -286,6 +289,85 @@ func TestEventTimeZonePersistsUpdatesAndClears(t *testing.T) {
 	}
 	if cleared.TimeZone != nil {
 		t.Fatalf("cleared timezone = %#v, want nil", cleared.TimeZone)
+	}
+}
+
+func TestICalendarUIDPersistsAndLooksUpWithinCalendar(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	firstCalendar := domain.Calendar{ID: "cal-ical-first", Name: "First", CreatedAt: now, UpdatedAt: now}
+	secondCalendar := domain.Calendar{ID: "cal-ical-second", Name: "Second", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(firstCalendar); err != nil {
+		t.Fatalf("CreateCalendar(first): %v", err)
+	}
+	if err := repository.CreateCalendar(secondCalendar); err != nil {
+		t.Fatalf("CreateCalendar(second): %v", err)
+	}
+
+	uid := "shared@example.com"
+	firstEvent := domain.Event{
+		ID:           "event-ical-first",
+		CalendarID:   firstCalendar.ID,
+		ICalendarUID: &uid,
+		Title:        "First event",
+		StartDate:    stringPtr("2026-04-21"),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := repository.CreateEvent(firstEvent); err != nil {
+		t.Fatalf("CreateEvent(first): %v", err)
+	}
+	secondEvent := firstEvent
+	secondEvent.ID = "event-ical-second"
+	secondEvent.CalendarID = secondCalendar.ID
+	if err := repository.CreateEvent(secondEvent); err != nil {
+		t.Fatalf("CreateEvent(second calendar same UID): %v", err)
+	}
+	duplicateEvent := firstEvent
+	duplicateEvent.ID = "event-ical-duplicate"
+	if err := repository.CreateEvent(duplicateEvent); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateEvent(duplicate UID) error = %v, want ErrConflict", err)
+	}
+
+	found, err := repository.GetEventByICalendarUID(firstCalendar.ID, uid)
+	if err != nil {
+		t.Fatalf("GetEventByICalendarUID(): %v", err)
+	}
+	if found.ID != firstEvent.ID || found.ICalendarUID == nil || *found.ICalendarUID != uid {
+		t.Fatalf("found event = %#v, want first event by UID", found)
+	}
+
+	task := domain.Task{
+		ID:           "task-ical-first",
+		CalendarID:   firstCalendar.ID,
+		ICalendarUID: &uid,
+		Title:        "First task",
+		DueDate:      stringPtr("2026-04-21"),
+		Priority:     domain.TaskPriorityMedium,
+		Status:       domain.TaskStatusTodo,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := repository.CreateTask(task); err != nil {
+		t.Fatalf("CreateTask(): %v", err)
+	}
+	foundTask, err := repository.GetTaskByICalendarUID(firstCalendar.ID, uid)
+	if err != nil {
+		t.Fatalf("GetTaskByICalendarUID(): %v", err)
+	}
+	if foundTask.ID != task.ID || foundTask.ICalendarUID == nil || *foundTask.ICalendarUID != uid {
+		t.Fatalf("found task = %#v, want task by UID", foundTask)
 	}
 }
 

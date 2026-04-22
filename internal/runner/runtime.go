@@ -287,6 +287,17 @@ func (runtime *localRuntime) ExportICalendar(ctx context.Context, calendarID str
 	return service.ExportICalendar(calendarID)
 }
 
+func (runtime *localRuntime) ImportICalendar(ctx context.Context, request domain.ICalendarImportRequest) (domain.ICalendarImport, error) {
+	if err := checkContext(ctx); err != nil {
+		return domain.ICalendarImport{}, err
+	}
+	service, err := runtime.localService()
+	if err != nil {
+		return domain.ICalendarImport{}, err
+	}
+	return service.ImportICalendar(request)
+}
+
 func (runtime *localRuntime) CreateEventTaskLink(ctx context.Context, eventID string, taskID string) (domain.EventTaskLink, error) {
 	if err := checkContext(ctx); err != nil {
 		return domain.EventTaskLink{}, err

@@ -212,6 +212,22 @@ var migrations = []migration{
 			ALTER TABLE events ADD COLUMN time_zone TEXT;
 		`,
 	},
+	{
+		version: 8,
+		name:    "icalendar import identity",
+		sql: `
+			ALTER TABLE events ADD COLUMN ical_uid TEXT;
+			ALTER TABLE tasks ADD COLUMN ical_uid TEXT;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS events_calendar_ical_uid_idx
+				ON events(calendar_id, ical_uid)
+				WHERE ical_uid IS NOT NULL;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS tasks_calendar_ical_uid_idx
+				ON tasks(calendar_id, ical_uid)
+				WHERE ical_uid IS NOT NULL;
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -343,12 +359,12 @@ func (store *Store) CreateEvent(event domain.Event) error {
 
 	_, err = tx.Exec(`
 		INSERT INTO events (
-			id, calendar_id, title, description, location,
+			id, calendar_id, ical_uid, title, description, location,
 			start_at, end_at, time_zone, start_date, end_date, recurrence_json,
 			created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, event.ID, event.CalendarID, event.Title, nullableString(event.Description), nullableString(event.Location),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, event.ID, event.CalendarID, nullableString(event.ICalendarUID), event.Title, nullableString(event.Description), nullableString(event.Location),
 		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.TimeZone),
 		nullableString(event.StartDate), nullableString(event.EndDate),
 		recurrence, formatTime(event.CreatedAt), formatTime(event.UpdatedAt))
@@ -371,7 +387,7 @@ func (store *Store) CreateEvent(event domain.Event) error {
 
 func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 	query := `
-		SELECT id, calendar_id, title, description, location, start_at, end_at,
+		SELECT id, calendar_id, ical_uid, title, description, location, start_at, end_at,
 		       time_zone, start_date, end_date, recurrence_json, created_at, updated_at
 		FROM events
 	`
@@ -408,7 +424,7 @@ func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 
 func (store *Store) GetEvent(id string) (domain.Event, error) {
 	row := store.db.QueryRow(`
-		SELECT id, calendar_id, title, description, location, start_at, end_at,
+		SELECT id, calendar_id, ical_uid, title, description, location, start_at, end_at,
 		       time_zone, start_date, end_date, recurrence_json, created_at, updated_at
 		FROM events
 		WHERE id = ?
@@ -421,6 +437,37 @@ func (store *Store) GetEvent(id string) (domain.Event, error) {
 		}
 
 		return domain.Event{}, fmt.Errorf("get event: %w", err)
+	}
+
+	events := []domain.Event{event}
+	if err := store.loadEventReminders(events); err != nil {
+		return domain.Event{}, err
+	}
+	if err := store.loadEventAttendees(events); err != nil {
+		return domain.Event{}, err
+	}
+	if err := store.loadEventLinkedTaskIDs(events); err != nil {
+		return domain.Event{}, err
+	}
+
+	return events[0], nil
+}
+
+func (store *Store) GetEventByICalendarUID(calendarID string, uid string) (domain.Event, error) {
+	row := store.db.QueryRow(`
+		SELECT id, calendar_id, ical_uid, title, description, location, start_at, end_at,
+		       time_zone, start_date, end_date, recurrence_json, created_at, updated_at
+		FROM events
+		WHERE calendar_id = ? AND ical_uid = ?
+	`, calendarID, uid)
+
+	event, err := scanEvent(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Event{}, ErrNotFound
+		}
+
+		return domain.Event{}, fmt.Errorf("get event by ical uid: %w", err)
 	}
 
 	events := []domain.Event{event}
@@ -453,10 +500,10 @@ func (store *Store) UpdateEvent(event domain.Event) error {
 
 	result, err := tx.Exec(`
 		UPDATE events
-		SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?, time_zone = ?,
+		SET ical_uid = ?, title = ?, description = ?, location = ?, start_at = ?, end_at = ?, time_zone = ?,
 		    start_date = ?, end_date = ?, recurrence_json = ?, updated_at = ?
 		WHERE id = ?
-	`, event.Title, nullableString(event.Description), nullableString(event.Location),
+	`, nullableString(event.ICalendarUID), event.Title, nullableString(event.Description), nullableString(event.Location),
 		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.TimeZone),
 		nullableString(event.StartDate), nullableString(event.EndDate),
 		recurrence, formatTime(event.UpdatedAt), event.ID)
@@ -513,11 +560,11 @@ func (store *Store) CreateTask(task domain.Task) error {
 
 	_, err = tx.Exec(`
 		INSERT INTO tasks (
-			id, calendar_id, title, description, due_at, due_date,
+			id, calendar_id, ical_uid, title, description, due_at, due_date,
 			recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, task.ID, task.CalendarID, task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, task.ID, task.CalendarID, nullableString(task.ICalendarUID), task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
 		recurrence, task.Priority, task.Status, tagsJSON, nullableTime(task.CompletedAt), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
@@ -535,7 +582,7 @@ func (store *Store) CreateTask(task domain.Task) error {
 
 func (store *Store) ListTasks(params domain.TaskListParams) ([]domain.Task, error) {
 	query := `
-		SELECT id, calendar_id, title, description, due_at, due_date,
+		SELECT id, calendar_id, ical_uid, title, description, due_at, due_date,
 		       recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		FROM tasks
 	`
@@ -591,7 +638,7 @@ func (store *Store) ListTasks(params domain.TaskListParams) ([]domain.Task, erro
 
 func (store *Store) GetTask(id string) (domain.Task, error) {
 	row := store.db.QueryRow(`
-		SELECT id, calendar_id, title, description, due_at, due_date,
+		SELECT id, calendar_id, ical_uid, title, description, due_at, due_date,
 		       recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
 		FROM tasks
 		WHERE id = ?
@@ -604,6 +651,34 @@ func (store *Store) GetTask(id string) (domain.Task, error) {
 		}
 
 		return domain.Task{}, fmt.Errorf("get task: %w", err)
+	}
+
+	tasks := []domain.Task{task}
+	if err := store.loadTaskReminders(tasks); err != nil {
+		return domain.Task{}, err
+	}
+	if err := store.loadTaskLinkedEventIDs(tasks); err != nil {
+		return domain.Task{}, err
+	}
+
+	return tasks[0], nil
+}
+
+func (store *Store) GetTaskByICalendarUID(calendarID string, uid string) (domain.Task, error) {
+	row := store.db.QueryRow(`
+		SELECT id, calendar_id, ical_uid, title, description, due_at, due_date,
+		       recurrence_json, priority, status, tags_json, completed_at, created_at, updated_at
+		FROM tasks
+		WHERE calendar_id = ? AND ical_uid = ?
+	`, calendarID, uid)
+
+	task, err := scanTask(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Task{}, ErrNotFound
+		}
+
+		return domain.Task{}, fmt.Errorf("get task by ical uid: %w", err)
 	}
 
 	tasks := []domain.Task{task}
@@ -637,10 +712,10 @@ func (store *Store) UpdateTask(task domain.Task) error {
 
 	result, err := tx.Exec(`
 		UPDATE tasks
-		SET title = ?, description = ?, due_at = ?, due_date = ?,
+		SET ical_uid = ?, title = ?, description = ?, due_at = ?, due_date = ?,
 		    recurrence_json = ?, priority = ?, status = ?, tags_json = ?, completed_at = ?, updated_at = ?
 		WHERE id = ?
-	`, task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
+	`, nullableString(task.ICalendarUID), task.Title, nullableString(task.Description), nullableTime(task.DueAt), nullableString(task.DueDate),
 		recurrence, task.Priority, task.Status, tagsJSON, nullableTime(task.CompletedAt), formatTime(task.UpdatedAt), task.ID)
 	if err != nil {
 		return mapWriteError(err)
@@ -815,6 +890,17 @@ func (store *Store) ListTaskCompletions(taskIDs []string) (map[string]map[string
 	return completions, nil
 }
 
+func (store *Store) DeleteTaskCompletions(taskID string) error {
+	if _, err := store.db.Exec(`
+		DELETE FROM task_occurrence_states
+		WHERE task_id = ?
+	`, taskID); err != nil {
+		return fmt.Errorf("delete task completions: %w", err)
+	}
+
+	return nil
+}
+
 func (store *Store) UpsertOccurrenceState(state domain.OccurrenceState) error {
 	eventID := sql.NullString{}
 	taskID := sql.NullString{}
@@ -848,6 +934,17 @@ func (store *Store) UpsertOccurrenceState(state domain.OccurrenceState) error {
 		formatTime(state.CreatedAt), formatTime(state.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
+	}
+
+	return nil
+}
+
+func (store *Store) DeleteOccurrenceStates(ownerKind domain.OccurrenceOwnerKind, ownerID string) error {
+	if _, err := store.db.Exec(`
+		DELETE FROM recurrence_occurrence_states
+		WHERE owner_kind = ? AND owner_id = ?
+	`, ownerKind, ownerID); err != nil {
+		return fmt.Errorf("delete occurrence states: %w", err)
 	}
 
 	return nil
@@ -1511,6 +1608,7 @@ func scanEvent(scanner interface {
 }) (domain.Event, error) {
 	var (
 		event          domain.Event
+		icalUID        sql.NullString
 		description    sql.NullString
 		location       sql.NullString
 		startAt        sql.NullString
@@ -1523,7 +1621,7 @@ func scanEvent(scanner interface {
 		updatedAt      string
 	)
 	if err := scanner.Scan(
-		&event.ID, &event.CalendarID, &event.Title, &description, &location,
+		&event.ID, &event.CalendarID, &icalUID, &event.Title, &description, &location,
 		&startAt, &endAt, &timeZone, &startDate, &endDate, &recurrenceJSON, &createdAt, &updatedAt,
 	); err != nil {
 		return domain.Event{}, err
@@ -1533,6 +1631,7 @@ func scanEvent(scanner interface {
 	if err != nil {
 		return domain.Event{}, err
 	}
+	event.ICalendarUID = parseNullableString(icalUID)
 	event.Description = parseNullableString(description)
 	event.Location = parseNullableString(location)
 	event.StartAt = parseNullableTime(startAt)
@@ -1568,6 +1667,7 @@ func scanTask(scanner interface {
 }) (domain.Task, error) {
 	var (
 		task           domain.Task
+		icalUID        sql.NullString
 		description    sql.NullString
 		dueAt          sql.NullString
 		dueDate        sql.NullString
@@ -1578,7 +1678,7 @@ func scanTask(scanner interface {
 		updatedAt      string
 	)
 	if err := scanner.Scan(
-		&task.ID, &task.CalendarID, &task.Title, &description, &dueAt, &dueDate,
+		&task.ID, &task.CalendarID, &icalUID, &task.Title, &description, &dueAt, &dueDate,
 		&recurrenceJSON, &task.Priority, &task.Status, &tagsJSON, &completedAt, &createdAt, &updatedAt,
 	); err != nil {
 		return domain.Task{}, err
@@ -1592,6 +1692,7 @@ func scanTask(scanner interface {
 	if err != nil {
 		return domain.Task{}, err
 	}
+	task.ICalendarUID = parseNullableString(icalUID)
 	task.Description = parseNullableString(description)
 	task.DueAt = parseNullableTime(dueAt)
 	task.DueDate = parseNullableString(dueDate)

@@ -1,6 +1,9 @@
 package icalendar
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +187,139 @@ func TestBuildAllDayEventUsesExclusiveDTEND(t *testing.T) {
 
 	assertContains(t, unfolded, "DTSTART;VALUE=DATE:20260416")
 	assertContains(t, unfolded, "DTEND;VALUE=DATE:20260418")
+}
+
+func TestParseImportMapsSupportedEventTaskAndExceptions(t *testing.T) {
+	content := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"X-WR-CALNAME:Work",
+		"BEGIN:VEVENT",
+		"UID:event-1@example.com",
+		"SUMMARY:Weekly sync",
+		"DESCRIPTION:Discuss launch",
+		"LOCATION:Room 1",
+		"DTSTART;TZID=America/New_York:20260303T090000",
+		"DTEND;TZID=America/New_York:20260303T100000",
+		"RRULE:FREQ=WEEKLY;COUNT=3;BYDAY=TU",
+		"EXDATE;TZID=America/New_York:20260310T090000",
+		"ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN=Alex Rivera:mailto:alex@example.com",
+		"BEGIN:VALARM",
+		"ACTION:DISPLAY",
+		"TRIGGER:-PT30M",
+		"END:VALARM",
+		"END:VEVENT",
+		"BEGIN:VEVENT",
+		"UID:event-1@example.com",
+		"RECURRENCE-ID;TZID=America/New_York:20260317T090000",
+		"SUMMARY:Weekly sync",
+		"DTSTART;TZID=America/New_York:20260317T110000",
+		"DTEND;TZID=America/New_York:20260317T120000",
+		"END:VEVENT",
+		"BEGIN:VTODO",
+		"UID:task-1@example.com",
+		"SUMMARY:Review notes",
+		"DUE;VALUE=DATE:20260416",
+		"RRULE:FREQ=MONTHLY;COUNT=3;BYMONTHDAY=16",
+		"STATUS:IN-PROCESS",
+		"PRIORITY:1",
+		"CATEGORIES:planning,review",
+		"BEGIN:VALARM",
+		"ACTION:DISPLAY",
+		"TRIGGER;RELATED=END:-PT60M",
+		"END:VALARM",
+		"END:VTODO",
+		"BEGIN:VTODO",
+		"UID:task-1@example.com",
+		"RECURRENCE-ID;VALUE=DATE:20260516",
+		"SUMMARY:Review notes",
+		"DUE;VALUE=DATE:20260517",
+		"STATUS:COMPLETED",
+		"COMPLETED:20260517T120000Z",
+		"END:VTODO",
+		"END:VCALENDAR",
+	}, "\r\n")
+
+	parsed, err := ParseImport(content)
+	if err != nil {
+		t.Fatalf("ParseImport(): %v", err)
+	}
+	if len(parsed.Skips) != 0 {
+		t.Fatalf("skips = %#v, want none", parsed.Skips)
+	}
+	if parsed.CalendarName != "Work" || len(parsed.Events) != 1 || len(parsed.EventChanges) != 1 || len(parsed.Tasks) != 1 || len(parsed.TaskChanges) != 1 {
+		t.Fatalf("parsed = %#v, want imported event/task and changes", parsed)
+	}
+	event := parsed.Events[0].Event
+	if event.TimeZone == nil || *event.TimeZone != "America/New_York" || event.Recurrence == nil || len(event.Reminders) != 1 || len(event.Attendees) != 1 {
+		t.Fatalf("event = %#v, want timezone recurrence reminder attendee", event)
+	}
+	if len(parsed.Events[0].ExDates) != 1 || parsed.Events[0].ExDates[0].At == nil {
+		t.Fatalf("event exdates = %#v, want timed EXDATE", parsed.Events[0].ExDates)
+	}
+	task := parsed.Tasks[0].Task
+	if task.DueDate == nil || *task.DueDate != "2026-04-16" || task.Priority != domain.TaskPriorityHigh || task.Status != domain.TaskStatusInProgress || !slices.Equal(task.Tags, []string{"planning", "review"}) {
+		t.Fatalf("task = %#v, want mapped VTODO metadata", task)
+	}
+	if parsed.TaskChanges[0].CompletedAt == nil || parsed.TaskChanges[0].Replacement.DueDate == nil || *parsed.TaskChanges[0].Replacement.DueDate != "2026-05-17" {
+		t.Fatalf("task change = %#v, want completion and replacement due date", parsed.TaskChanges[0])
+	}
+}
+
+func TestParseImportRejectsMalformedAndSkipsUnsupportedComponents(t *testing.T) {
+	if _, err := ParseImport("not an ics file"); err == nil {
+		t.Fatal("ParseImport(malformed) error = nil, want error")
+	}
+
+	content := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"BEGIN:VEVENT",
+		"UID:event-unsupported@example.com",
+		"SUMMARY:Unsupported",
+		"DTSTART:20260416T090000",
+		"RRULE:FREQ=HOURLY;COUNT=2",
+		"END:VEVENT",
+		"BEGIN:VEVENT",
+		"UID:event-allday@example.com",
+		"SUMMARY:Retreat",
+		"DTSTART;VALUE=DATE:20260416",
+		"DTEND;VALUE=DATE:20260418",
+		"END:VEVENT",
+		"END:VCALENDAR",
+	}, "\r\n")
+
+	parsed, err := ParseImport(content)
+	if err != nil {
+		t.Fatalf("ParseImport(): %v", err)
+	}
+	if len(parsed.Events) != 1 || parsed.Events[0].Event.EndDate == nil || *parsed.Events[0].Event.EndDate != "2026-04-17" {
+		t.Fatalf("events = %#v, want imported all-day event with inclusive end date", parsed.Events)
+	}
+	if len(parsed.Skips) != 1 || parsed.Skips[0].UID != "event-unsupported@example.com" {
+		t.Fatalf("skips = %#v, want unsupported event skip", parsed.Skips)
+	}
+}
+
+func TestParseImportProviderFixtures(t *testing.T) {
+	for _, name := range []string{"google.ics", "apple.ics", "microsoft.ics"} {
+		t.Run(name, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join("testdata", "import", name))
+			if err != nil {
+				t.Fatalf("ReadFile(): %v", err)
+			}
+			parsed, err := ParseImport(string(content))
+			if err != nil {
+				t.Fatalf("ParseImport(): %v", err)
+			}
+			if len(parsed.Events)+len(parsed.Tasks) == 0 {
+				t.Fatalf("parsed = %#v, want at least one imported component", parsed)
+			}
+			if len(parsed.Skips) != 0 {
+				t.Fatalf("skips = %#v, want provider fixture without skips", parsed.Skips)
+			}
+		})
+	}
 }
 
 func unfold(content string) string {

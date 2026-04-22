@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -1224,6 +1225,116 @@ func TestTaskStatusDoneCompletionInvariants(t *testing.T) {
 	}
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("UpdateTask(recurring done) error = %T, want ValidationError", err)
+	}
+}
+
+func TestImportICalendarClonesOpenPlannerExportIntoRequestedCalendar(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	sourceCalendar := createCalendar(t, svc)
+	targetCalendar, err := svc.CreateCalendar(domain.Calendar{Name: "Target"})
+	if err != nil {
+		t.Fatalf("CreateCalendar(target): %v", err)
+	}
+	startDate := "2026-04-16"
+	if _, err := svc.CreateEvent(domain.Event{
+		CalendarID: sourceCalendar.ID,
+		Title:      "Source event",
+		StartDate:  &startDate,
+	}); err != nil {
+		t.Fatalf("CreateEvent(source): %v", err)
+	}
+
+	exported, err := svc.ExportICalendar(sourceCalendar.ID)
+	if err != nil {
+		t.Fatalf("ExportICalendar(): %v", err)
+	}
+	content := strings.Replace(exported.Content, "SUMMARY:Source event", "SUMMARY:Imported clone", 1)
+	if _, err := svc.ImportICalendar(domain.ICalendarImportRequest{
+		CalendarID: targetCalendar.ID,
+		Content:    content,
+	}); err != nil {
+		t.Fatalf("ImportICalendar(): %v", err)
+	}
+
+	sourceEvents, err := svc.ListEvents(domain.PageParams{CalendarID: sourceCalendar.ID})
+	if err != nil {
+		t.Fatalf("ListEvents(source): %v", err)
+	}
+	if len(sourceEvents.Items) != 1 || sourceEvents.Items[0].Title != "Source event" {
+		t.Fatalf("source events = %#v, want unchanged source event", sourceEvents.Items)
+	}
+	targetEvents, err := svc.ListEvents(domain.PageParams{CalendarID: targetCalendar.ID})
+	if err != nil {
+		t.Fatalf("ListEvents(target): %v", err)
+	}
+	if len(targetEvents.Items) != 1 || targetEvents.Items[0].Title != "Imported clone" {
+		t.Fatalf("target events = %#v, want imported clone in target calendar", targetEvents.Items)
+	}
+}
+
+func TestImportICalendarReimportRemovesStaleOccurrenceState(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	withExdate := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"BEGIN:VEVENT",
+		"UID:event-stale@example.com",
+		"SUMMARY:Daily focus",
+		"DTSTART;VALUE=DATE:20260416",
+		"RRULE:FREQ=DAILY;COUNT=2",
+		"EXDATE;VALUE=DATE:20260417",
+		"END:VEVENT",
+		"END:VCALENDAR",
+	}, "\r\n")
+	withoutExdate := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"BEGIN:VEVENT",
+		"UID:event-stale@example.com",
+		"SUMMARY:Daily focus",
+		"DTSTART;VALUE=DATE:20260416",
+		"RRULE:FREQ=DAILY;COUNT=2",
+		"END:VEVENT",
+		"END:VCALENDAR",
+	}, "\r\n")
+
+	if _, err := svc.ImportICalendar(domain.ICalendarImportRequest{
+		CalendarID: calendar.ID,
+		Content:    withExdate,
+	}); err != nil {
+		t.Fatalf("ImportICalendar(withExdate): %v", err)
+	}
+	firstAgenda, err := svc.ListAgenda(domain.AgendaParams{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 18, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(first): %v", err)
+	}
+	if len(firstAgenda.Items) != 1 {
+		t.Fatalf("first agenda = %#v, want EXDATE to suppress one occurrence", firstAgenda.Items)
+	}
+
+	if _, err := svc.ImportICalendar(domain.ICalendarImportRequest{
+		CalendarID: calendar.ID,
+		Content:    withoutExdate,
+	}); err != nil {
+		t.Fatalf("ImportICalendar(withoutExdate): %v", err)
+	}
+	secondAgenda, err := svc.ListAgenda(domain.AgendaParams{
+		From: time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 4, 18, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(second): %v", err)
+	}
+	if len(secondAgenda.Items) != 2 {
+		t.Fatalf("second agenda = %#v, want reimport to restore removed occurrence", secondAgenda.Items)
 	}
 }
 

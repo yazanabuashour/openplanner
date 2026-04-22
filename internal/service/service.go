@@ -29,6 +29,19 @@ type Service struct {
 	now   func() time.Time
 }
 
+type calendarWriteStatus string
+
+const (
+	calendarWriteStatusCreated       calendarWriteStatus = "created"
+	calendarWriteStatusAlreadyExists calendarWriteStatus = "already_exists"
+	calendarWriteStatusUpdated       calendarWriteStatus = "updated"
+)
+
+type calendarWriteResult struct {
+	Calendar domain.Calendar
+	Status   calendarWriteStatus
+}
+
 func New(repository *store.Store) *Service {
 	return &Service{
 		store: repository,
@@ -190,21 +203,22 @@ func (service *Service) CreateEvent(input domain.Event) (domain.Event, error) {
 
 	now := service.now()
 	event := domain.Event{
-		ID:          ulid.Make().String(),
-		CalendarID:  input.CalendarID,
-		Title:       strings.TrimSpace(input.Title),
-		Description: sanitizeOptionalString(input.Description),
-		Location:    sanitizeOptionalString(input.Location),
-		StartAt:     cloneTimePtr(input.StartAt),
-		EndAt:       cloneTimePtr(input.EndAt),
-		TimeZone:    sanitizeOptionalString(input.TimeZone),
-		StartDate:   sanitizeOptionalString(input.StartDate),
-		EndDate:     sanitizeOptionalString(input.EndDate),
-		Recurrence:  cloneRule(input.Recurrence),
-		Reminders:   buildReminderRules(input.Reminders, now),
-		Attendees:   buildEventAttendees(input.Attendees, now),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           ulid.Make().String(),
+		CalendarID:   input.CalendarID,
+		ICalendarUID: sanitizeOptionalString(input.ICalendarUID),
+		Title:        strings.TrimSpace(input.Title),
+		Description:  sanitizeOptionalString(input.Description),
+		Location:     sanitizeOptionalString(input.Location),
+		StartAt:      cloneTimePtr(input.StartAt),
+		EndAt:        cloneTimePtr(input.EndAt),
+		TimeZone:     sanitizeOptionalString(input.TimeZone),
+		StartDate:    sanitizeOptionalString(input.StartDate),
+		EndDate:      sanitizeOptionalString(input.EndDate),
+		Recurrence:   cloneRule(input.Recurrence),
+		Reminders:    buildReminderRules(input.Reminders, now),
+		Attendees:    buildEventAttendees(input.Attendees, now),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := validateEvent(event); err != nil {
@@ -388,19 +402,21 @@ func (service *Service) CreateTask(input domain.Task) (domain.Task, error) {
 	}
 
 	task := domain.Task{
-		ID:          ulid.Make().String(),
-		CalendarID:  input.CalendarID,
-		Title:       strings.TrimSpace(input.Title),
-		Description: sanitizeOptionalString(input.Description),
-		DueAt:       cloneTimePtr(input.DueAt),
-		DueDate:     sanitizeOptionalString(input.DueDate),
-		Recurrence:  cloneRule(input.Recurrence),
-		Reminders:   buildReminderRules(input.Reminders, service.now()),
-		Priority:    defaultTaskPriority(input.Priority),
-		Status:      defaultTaskStatus(input.Status),
-		Tags:        normalizeTags(input.Tags),
-		CreatedAt:   service.now(),
-		UpdatedAt:   service.now(),
+		ID:           ulid.Make().String(),
+		CalendarID:   input.CalendarID,
+		ICalendarUID: sanitizeOptionalString(input.ICalendarUID),
+		Title:        strings.TrimSpace(input.Title),
+		Description:  sanitizeOptionalString(input.Description),
+		DueAt:        cloneTimePtr(input.DueAt),
+		DueDate:      sanitizeOptionalString(input.DueDate),
+		Recurrence:   cloneRule(input.Recurrence),
+		Reminders:    buildReminderRules(input.Reminders, service.now()),
+		Priority:     defaultTaskPriority(input.Priority),
+		Status:       defaultTaskStatus(input.Status),
+		Tags:         normalizeTags(input.Tags),
+		CompletedAt:  cloneTimePtr(input.CompletedAt),
+		CreatedAt:    service.now(),
+		UpdatedAt:    service.now(),
 	}
 	if task.Status == domain.TaskStatusDone {
 		if task.Recurrence != nil {
@@ -411,8 +427,10 @@ func (service *Service) CreateTask(input domain.Task) (domain.Task, error) {
 				},
 			}
 		}
-		completedAt := service.now()
-		task.CompletedAt = &completedAt
+		if task.CompletedAt == nil {
+			completedAt := service.now()
+			task.CompletedAt = &completedAt
+		}
 	}
 
 	if err := validateTask(task); err != nil {
@@ -539,6 +557,522 @@ func (service *Service) ExportICalendar(calendarID string) (domain.ICalendarExpo
 		TaskCount:    result.TaskCount,
 		Content:      result.Content,
 	}, nil
+}
+
+func (service *Service) ImportICalendar(request domain.ICalendarImportRequest) (domain.ICalendarImport, error) {
+	content := strings.TrimSpace(request.Content)
+	if content == "" {
+		return domain.ICalendarImport{}, &ValidationError{
+			Message:     "icalendar import validation failed",
+			FieldErrors: []FieldError{{Field: "content", Message: "content is required"}},
+		}
+	}
+	if strings.TrimSpace(request.CalendarID) != "" && strings.TrimSpace(request.CalendarName) != "" {
+		return domain.ICalendarImport{}, &ValidationError{
+			Message:     "icalendar import validation failed",
+			FieldErrors: []FieldError{{Field: "calendar", Message: "use calendarId or calendarName, not both"}},
+		}
+	}
+
+	parsed, err := icalendar.ParseImport(content)
+	if err != nil {
+		return domain.ICalendarImport{}, &ValidationError{
+			Message:     "icalendar import validation failed",
+			FieldErrors: []FieldError{{Field: "content", Message: err.Error()}},
+		}
+	}
+
+	result := domain.ICalendarImport{Skips: append([]domain.ICalendarImportSkip(nil), parsed.Skips...)}
+	calendarCache := map[string]domain.Calendar{}
+	if request.CalendarID != "" {
+		if err := validateResourceID("calendarId", request.CalendarID); err != nil {
+			return domain.ICalendarImport{}, err
+		}
+		calendar, err := service.GetCalendar(request.CalendarID)
+		if err != nil {
+			return domain.ICalendarImport{}, err
+		}
+		calendarCache[calendar.Name] = calendar
+	}
+
+	eventByUID := map[string]domain.Event{}
+	taskByUID := map[string]domain.Task{}
+	calendarIDs := map[string]bool{}
+
+	for _, imported := range parsed.Events {
+		calendar, write, err := service.resolveImportCalendar(request, imported.CalendarName, parsed.CalendarColor, calendarCache)
+		if err != nil {
+			return domain.ICalendarImport{}, err
+		}
+		if write != nil {
+			result.Writes = append(result.Writes, *write)
+			countImportWrite(&result, write.Status)
+		}
+		calendarIDs[calendar.ID] = true
+
+		eventInput := imported.Event
+		eventInput.CalendarID = calendar.ID
+		event, status, err := service.importEvent(imported, eventInput)
+		if err != nil {
+			service.addImportSkip(&result, "event", imported.UID, err.Error())
+			continue
+		}
+		eventByUID[imported.UID] = event
+		result.EventCount++
+		result.Writes = append(result.Writes, domain.ICalendarImportWrite{Kind: "event", ID: event.ID, Status: status, Title: event.Title})
+		countImportWrite(&result, status)
+
+		for _, exDate := range imported.ExDates {
+			if event.Recurrence == nil || eventChangeHasSelector(parsed.EventChanges, imported.UID, exDate) {
+				continue
+			}
+			state, err := service.importCancelEventOccurrence(event, exDate)
+			if err != nil {
+				service.addImportSkip(&result, "event_occurrence", imported.UID, err.Error())
+				continue
+			}
+			result.Writes = append(result.Writes, domain.ICalendarImportWrite{
+				Kind:          "event_occurrence",
+				ID:            event.ID,
+				Status:        "updated",
+				OccurrenceKey: state.OccurrenceKey,
+			})
+			countImportWrite(&result, "updated")
+		}
+	}
+
+	for _, imported := range parsed.Tasks {
+		calendar, write, err := service.resolveImportCalendar(request, imported.CalendarName, parsed.CalendarColor, calendarCache)
+		if err != nil {
+			return domain.ICalendarImport{}, err
+		}
+		if write != nil {
+			result.Writes = append(result.Writes, *write)
+			countImportWrite(&result, write.Status)
+		}
+		calendarIDs[calendar.ID] = true
+
+		taskInput := imported.Task
+		taskInput.CalendarID = calendar.ID
+		task, status, err := service.importTask(imported, taskInput)
+		if err != nil {
+			service.addImportSkip(&result, "task", imported.UID, err.Error())
+			continue
+		}
+		taskByUID[imported.UID] = task
+		result.TaskCount++
+		result.Writes = append(result.Writes, domain.ICalendarImportWrite{Kind: "task", ID: task.ID, Status: status, Title: task.Title})
+		countImportWrite(&result, status)
+
+		for _, exDate := range imported.ExDates {
+			if task.Recurrence == nil || taskChangeHasSelector(parsed.TaskChanges, imported.UID, exDate) {
+				continue
+			}
+			state, err := service.importCancelTaskOccurrence(task, exDate)
+			if err != nil {
+				service.addImportSkip(&result, "task_occurrence", imported.UID, err.Error())
+				continue
+			}
+			result.Writes = append(result.Writes, domain.ICalendarImportWrite{
+				Kind:          "task_occurrence",
+				ID:            task.ID,
+				Status:        "updated",
+				OccurrenceKey: state.OccurrenceKey,
+			})
+			countImportWrite(&result, "updated")
+		}
+	}
+
+	for _, change := range parsed.EventChanges {
+		event, ok := eventByUID[change.UID]
+		if !ok {
+			service.addImportSkip(&result, "event_occurrence", change.UID, "base event was not imported")
+			continue
+		}
+		state, err := service.importEventChange(event, change)
+		if err != nil {
+			service.addImportSkip(&result, "event_occurrence", change.UID, err.Error())
+			continue
+		}
+		result.Writes = append(result.Writes, domain.ICalendarImportWrite{
+			Kind:          "event_occurrence",
+			ID:            event.ID,
+			Status:        "updated",
+			OccurrenceKey: state.OccurrenceKey,
+		})
+		countImportWrite(&result, "updated")
+	}
+
+	for _, change := range parsed.TaskChanges {
+		task, ok := taskByUID[change.UID]
+		if !ok {
+			service.addImportSkip(&result, "task_occurrence", change.UID, "base task was not imported")
+			continue
+		}
+		if change.Cancelled {
+			state, err := service.importCancelTaskOccurrence(task, change.Recurrence)
+			if err != nil {
+				service.addImportSkip(&result, "task_occurrence", change.UID, err.Error())
+				continue
+			}
+			result.Writes = append(result.Writes, domain.ICalendarImportWrite{Kind: "task_occurrence", ID: task.ID, Status: "updated", OccurrenceKey: state.OccurrenceKey})
+			countImportWrite(&result, "updated")
+			continue
+		}
+		if change.Replacement.DueAt != nil || change.Replacement.DueDate != nil {
+			state, err := service.importRescheduleTaskOccurrence(task, change)
+			if err != nil {
+				service.addImportSkip(&result, "task_occurrence", change.UID, err.Error())
+				continue
+			}
+			result.Writes = append(result.Writes, domain.ICalendarImportWrite{Kind: "task_occurrence", ID: task.ID, Status: "updated", OccurrenceKey: state.OccurrenceKey})
+			countImportWrite(&result, "updated")
+		}
+		if change.Completed {
+			completion, status, err := service.importCompleteTaskOccurrence(task, change.Recurrence, change.CompletedAt)
+			if err != nil {
+				service.addImportSkip(&result, "task_completion", change.UID, err.Error())
+				continue
+			}
+			result.Writes = append(result.Writes, domain.ICalendarImportWrite{
+				Kind:          "task_completion",
+				ID:            task.ID,
+				Status:        status,
+				OccurrenceKey: completion.OccurrenceKey,
+			})
+			countImportWrite(&result, status)
+		}
+	}
+
+	result.CalendarCount = len(calendarIDs)
+	result.SkippedCount += len(result.Skips)
+	return result, nil
+}
+
+func (service *Service) resolveImportCalendar(request domain.ICalendarImportRequest, componentName string, color *string, cache map[string]domain.Calendar) (domain.Calendar, *domain.ICalendarImportWrite, error) {
+	if request.CalendarID != "" {
+		for _, calendar := range cache {
+			if calendar.ID == request.CalendarID {
+				return calendar, nil, nil
+			}
+		}
+		calendar, err := service.GetCalendar(request.CalendarID)
+		if err != nil {
+			return domain.Calendar{}, nil, err
+		}
+		cache[calendar.Name] = calendar
+		return calendar, nil, nil
+	}
+
+	name := strings.TrimSpace(request.CalendarName)
+	if name == "" {
+		name = strings.TrimSpace(componentName)
+	}
+	if name == "" {
+		name = "Imported Calendar"
+	}
+	if calendar, ok := cache[name]; ok {
+		return calendar, nil, nil
+	}
+
+	written, err := service.ensureImportCalendar(domain.Calendar{Name: name, Color: color})
+	if err != nil {
+		return domain.Calendar{}, nil, err
+	}
+	cache[written.Calendar.Name] = written.Calendar
+	if written.Status == calendarWriteStatusAlreadyExists {
+		return written.Calendar, nil, nil
+	}
+	return written.Calendar, &domain.ICalendarImportWrite{
+		Kind:   "calendar",
+		ID:     written.Calendar.ID,
+		Status: string(written.Status),
+		Name:   written.Calendar.Name,
+	}, nil
+}
+
+func (service *Service) ensureImportCalendar(input domain.Calendar) (calendarWriteResult, error) {
+	name := strings.TrimSpace(input.Name)
+	calendars, err := service.store.ListCalendars()
+	if err != nil {
+		return calendarWriteResult{}, err
+	}
+	for _, calendar := range calendars {
+		if calendar.Name != name {
+			continue
+		}
+		if input.Color != nil && !stringPtrEqual(calendar.Color, sanitizeOptionalString(input.Color)) {
+			updated, err := service.UpdateCalendar(calendar.ID, domain.CalendarPatch{Color: domain.SetPatch(*input.Color)})
+			if err != nil {
+				return calendarWriteResult{}, err
+			}
+			return calendarWriteResult{Calendar: updated, Status: calendarWriteStatusUpdated}, nil
+		}
+		return calendarWriteResult{Calendar: calendar, Status: calendarWriteStatusAlreadyExists}, nil
+	}
+	calendar, err := service.CreateCalendar(domain.Calendar{Name: name, Color: input.Color})
+	if err != nil {
+		return calendarWriteResult{}, err
+	}
+	return calendarWriteResult{Calendar: calendar, Status: calendarWriteStatusCreated}, nil
+}
+
+func (service *Service) importEvent(imported icalendar.ImportedEvent, eventInput domain.Event) (domain.Event, string, error) {
+	if id := strings.TrimSpace(imported.OpenPlannerID); id != "" {
+		if _, err := ulid.ParseStrict(id); err == nil {
+			existing, err := service.GetEvent(id)
+			if err == nil {
+				if existing.CalendarID == eventInput.CalendarID {
+					return service.importUpdateEvent(existing, eventInput)
+				}
+			} else {
+				var notFound *NotFoundError
+				if !errors.As(err, &notFound) {
+					return domain.Event{}, "", err
+				}
+			}
+		}
+	}
+	if imported.UID != "" {
+		existing, err := service.store.GetEventByICalendarUID(eventInput.CalendarID, imported.UID)
+		if err == nil {
+			return service.importUpdateEvent(existing, eventInput)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return domain.Event{}, "", err
+		}
+	}
+	created, err := service.CreateEvent(eventInput)
+	if err != nil {
+		return domain.Event{}, "", err
+	}
+	return created, "created", nil
+}
+
+func (service *Service) importUpdateEvent(existing domain.Event, input domain.Event) (domain.Event, string, error) {
+	existing.ICalendarUID = sanitizeOptionalString(input.ICalendarUID)
+	existing.Title = strings.TrimSpace(input.Title)
+	existing.Description = sanitizeOptionalString(input.Description)
+	existing.Location = sanitizeOptionalString(input.Location)
+	existing.StartAt = cloneTimePtr(input.StartAt)
+	existing.EndAt = cloneTimePtr(input.EndAt)
+	existing.TimeZone = sanitizeOptionalString(input.TimeZone)
+	existing.StartDate = sanitizeOptionalString(input.StartDate)
+	existing.EndDate = sanitizeOptionalString(input.EndDate)
+	existing.Recurrence = cloneRule(input.Recurrence)
+	existing.Reminders = buildReminderRules(input.Reminders, service.now())
+	existing.Attendees = buildEventAttendees(input.Attendees, service.now())
+	existing.UpdatedAt = service.now()
+	if err := validateEvent(existing); err != nil {
+		return domain.Event{}, "", err
+	}
+	if err := service.store.UpdateEvent(existing); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return domain.Event{}, "", &ConflictError{Message: "event iCalendar UID already exists"}
+		}
+		return domain.Event{}, "", err
+	}
+	if err := service.store.DeleteOccurrenceStates(domain.OccurrenceOwnerKindEvent, existing.ID); err != nil {
+		return domain.Event{}, "", err
+	}
+	return existing, "updated", nil
+}
+
+func (service *Service) importTask(imported icalendar.ImportedTask, taskInput domain.Task) (domain.Task, string, error) {
+	if id := strings.TrimSpace(imported.OpenPlannerID); id != "" {
+		if _, err := ulid.ParseStrict(id); err == nil {
+			existing, err := service.GetTask(id)
+			if err == nil {
+				if existing.CalendarID == taskInput.CalendarID {
+					return service.importUpdateTask(existing, taskInput)
+				}
+			} else {
+				var notFound *NotFoundError
+				if !errors.As(err, &notFound) {
+					return domain.Task{}, "", err
+				}
+			}
+		}
+	}
+	if imported.UID != "" {
+		existing, err := service.store.GetTaskByICalendarUID(taskInput.CalendarID, imported.UID)
+		if err == nil {
+			return service.importUpdateTask(existing, taskInput)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return domain.Task{}, "", err
+		}
+	}
+	created, err := service.CreateTask(taskInput)
+	if err != nil {
+		return domain.Task{}, "", err
+	}
+	return created, "created", nil
+}
+
+func (service *Service) importUpdateTask(existing domain.Task, input domain.Task) (domain.Task, string, error) {
+	existing.ICalendarUID = sanitizeOptionalString(input.ICalendarUID)
+	existing.Title = strings.TrimSpace(input.Title)
+	existing.Description = sanitizeOptionalString(input.Description)
+	existing.DueAt = cloneTimePtr(input.DueAt)
+	existing.DueDate = sanitizeOptionalString(input.DueDate)
+	existing.Recurrence = cloneRule(input.Recurrence)
+	existing.Reminders = buildReminderRules(input.Reminders, service.now())
+	existing.Priority = defaultTaskPriority(input.Priority)
+	existing.Status = defaultTaskStatus(input.Status)
+	existing.Tags = normalizeTags(input.Tags)
+	existing.CompletedAt = cloneTimePtr(input.CompletedAt)
+	if existing.Status == domain.TaskStatusDone && existing.CompletedAt == nil {
+		completedAt := service.now()
+		existing.CompletedAt = &completedAt
+	}
+	existing.UpdatedAt = service.now()
+	if err := validateTask(existing); err != nil {
+		return domain.Task{}, "", err
+	}
+	if err := service.store.UpdateTask(existing); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return domain.Task{}, "", &ConflictError{Message: "task iCalendar UID already exists"}
+		}
+		return domain.Task{}, "", err
+	}
+	if err := service.store.DeleteOccurrenceStates(domain.OccurrenceOwnerKindTask, existing.ID); err != nil {
+		return domain.Task{}, "", err
+	}
+	if err := service.store.DeleteTaskCompletions(existing.ID); err != nil {
+		return domain.Task{}, "", err
+	}
+	return existing, "updated", nil
+}
+
+func (service *Service) importEventChange(event domain.Event, change icalendar.ImportedEventChange) (domain.OccurrenceState, error) {
+	if change.Cancelled {
+		return service.importCancelEventOccurrence(event, change.Recurrence)
+	}
+	mutation := domain.OccurrenceMutationRequest{
+		OccurrenceAt:       cloneTimePtr(change.Recurrence.At),
+		OccurrenceDate:     cloneStringPtr(change.Recurrence.Date),
+		ReplacementAt:      cloneTimePtr(change.Replacement.StartAt),
+		ReplacementEndAt:   cloneTimePtr(change.Replacement.EndAt),
+		ReplacementDate:    cloneStringPtr(change.Replacement.StartDate),
+		ReplacementEndDate: cloneStringPtr(change.Replacement.EndDate),
+	}
+	return service.RescheduleEventOccurrence(event.ID, mutation)
+}
+
+func (service *Service) importCancelEventOccurrence(event domain.Event, selector icalendar.OccurrenceSelector) (domain.OccurrenceState, error) {
+	return service.CancelEventOccurrence(event.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:   cloneTimePtr(selector.At),
+		OccurrenceDate: cloneStringPtr(selector.Date),
+	})
+}
+
+func (service *Service) importCancelTaskOccurrence(task domain.Task, selector icalendar.OccurrenceSelector) (domain.OccurrenceState, error) {
+	return service.CancelTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:   cloneTimePtr(selector.At),
+		OccurrenceDate: cloneStringPtr(selector.Date),
+	})
+}
+
+func (service *Service) importRescheduleTaskOccurrence(task domain.Task, change icalendar.ImportedTaskChange) (domain.OccurrenceState, error) {
+	return service.RescheduleTaskOccurrence(task.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:    cloneTimePtr(change.Recurrence.At),
+		OccurrenceDate:  cloneStringPtr(change.Recurrence.Date),
+		ReplacementAt:   cloneTimePtr(change.Replacement.DueAt),
+		ReplacementDate: cloneStringPtr(change.Replacement.DueDate),
+	})
+}
+
+func (service *Service) importCompleteTaskOccurrence(task domain.Task, selector icalendar.OccurrenceSelector, completedAt *time.Time) (domain.TaskCompletion, string, error) {
+	if task.Recurrence == nil {
+		return domain.TaskCompletion{}, "", &ValidationError{
+			Message:     "task completion validation failed",
+			FieldErrors: []FieldError{{Field: "recurrence", Message: "task is not recurring"}},
+		}
+	}
+	completed := service.now()
+	if completedAt != nil {
+		completed = *completedAt
+	}
+	completion := domain.TaskCompletion{TaskID: task.ID, CompletedAt: completed}
+	switch {
+	case task.DueAt != nil && selector.At != nil:
+		if !recurrence.IncludesTimed(*task.DueAt, task.Recurrence, *selector.At) {
+			return domain.TaskCompletion{}, "", occurrenceValidationError("occurrenceAt", "occurrenceAt does not match the recurring task schedule")
+		}
+		key := occurrenceKey(task.ID, selector.At, nil)
+		if service.taskOccurrenceCancelled(task.ID, key) {
+			return domain.TaskCompletion{}, "", &ConflictError{Message: "task occurrence is canceled"}
+		}
+		completion.OccurrenceKey = key
+		completion.OccurrenceAt = cloneTimePtr(selector.At)
+	case task.DueDate != nil && selector.Date != nil:
+		if !recurrence.IncludesDate(*task.DueDate, task.Recurrence, *selector.Date) {
+			return domain.TaskCompletion{}, "", occurrenceValidationError("occurrenceDate", "occurrenceDate does not match the recurring task schedule")
+		}
+		key := occurrenceKey(task.ID, nil, selector.Date)
+		if service.taskOccurrenceCancelled(task.ID, key) {
+			return domain.TaskCompletion{}, "", &ConflictError{Message: "task occurrence is canceled"}
+		}
+		completion.OccurrenceKey = key
+		completion.OccurrenceDate = cloneStringPtr(selector.Date)
+	default:
+		return domain.TaskCompletion{}, "", &ValidationError{
+			Message:     "task completion validation failed",
+			FieldErrors: []FieldError{{Field: "occurrence", Message: "occurrence does not match task timing"}},
+		}
+	}
+	if err := service.store.CreateTaskCompletion(completion); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return completion, "skipped", nil
+		}
+		return domain.TaskCompletion{}, "", err
+	}
+	return completion, "created", nil
+}
+
+func eventChangeHasSelector(changes []icalendar.ImportedEventChange, uid string, selector icalendar.OccurrenceSelector) bool {
+	for _, change := range changes {
+		if change.UID == uid && occurrenceSelectorEqual(change.Recurrence, selector) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskChangeHasSelector(changes []icalendar.ImportedTaskChange, uid string, selector icalendar.OccurrenceSelector) bool {
+	for _, change := range changes {
+		if change.UID == uid && occurrenceSelectorEqual(change.Recurrence, selector) {
+			return true
+		}
+	}
+	return false
+}
+
+func occurrenceSelectorEqual(left icalendar.OccurrenceSelector, right icalendar.OccurrenceSelector) bool {
+	switch {
+	case left.At != nil && right.At != nil:
+		return left.At.Equal(*right.At)
+	case left.Date != nil && right.Date != nil:
+		return *left.Date == *right.Date
+	default:
+		return false
+	}
+}
+
+func (service *Service) addImportSkip(result *domain.ICalendarImport, kind string, uid string, reason string) {
+	result.Skips = append(result.Skips, domain.ICalendarImportSkip{Kind: kind, UID: uid, Reason: reason})
+}
+
+func countImportWrite(result *domain.ICalendarImport, status string) {
+	switch status {
+	case "created":
+		result.CreatedCount++
+	case "updated":
+		result.UpdatedCount++
+	case "skipped":
+		result.SkippedCount++
+	}
 }
 
 func (service *Service) GetTask(id string) (domain.Task, error) {
@@ -2819,6 +3353,13 @@ func sanitizeOptionalString(value *string) *string {
 	}
 
 	return &trimmed
+}
+
+func stringPtrEqual(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func cloneStringPtr(value *string) *string {

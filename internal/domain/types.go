@@ -99,6 +99,7 @@ type CalendarPatch struct {
 type Event struct {
 	ID            string
 	CalendarID    string
+	ICalendarUID  *string
 	Title         string
 	Description   *string
 	Location      *string
@@ -142,6 +143,7 @@ type EventAttendee struct {
 type Task struct {
 	ID             string
 	CalendarID     string
+	ICalendarUID   *string
 	Title          string
 	Description    *string
 	DueAt          *time.Time
@@ -337,4 +339,36 @@ type ICalendarExport struct {
 	EventCount   int
 	TaskCount    int
 	Content      string
+}
+
+type ICalendarImportRequest struct {
+	Content      string
+	CalendarID   string
+	CalendarName string
+}
+
+type ICalendarImportSkip struct {
+	Kind   string
+	UID    string
+	Reason string
+}
+
+type ICalendarImport struct {
+	CalendarCount int
+	EventCount    int
+	TaskCount     int
+	CreatedCount  int
+	UpdatedCount  int
+	SkippedCount  int
+	Writes        []ICalendarImportWrite
+	Skips         []ICalendarImportSkip
+}
+
+type ICalendarImportWrite struct {
+	Kind          string
+	ID            string
+	Status        string
+	Name          string
+	Title         string
+	OccurrenceKey string
 }

@@ -541,6 +541,127 @@ func TestRunPlanningTaskExportICalendarFiltersAndRejections(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskImportICalendarCreatesUpdatesAndAppliesOccurrences(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	content := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"X-WR-CALNAME:Work",
+		"BEGIN:VEVENT",
+		"UID:event-import@example.com",
+		"SUMMARY:Weekly sync",
+		"DTSTART;TZID=America/New_York:20260303T090000",
+		"DTEND;TZID=America/New_York:20260303T100000",
+		"RRULE:FREQ=WEEKLY;COUNT=2;BYDAY=TU",
+		"EXDATE;TZID=America/New_York:20260310T090000",
+		"BEGIN:VALARM",
+		"ACTION:DISPLAY",
+		"TRIGGER:-PT30M",
+		"END:VALARM",
+		"END:VEVENT",
+		"BEGIN:VEVENT",
+		"UID:event-import@example.com",
+		"RECURRENCE-ID;TZID=America/New_York:20260310T090000",
+		"SUMMARY:Weekly sync moved",
+		"DTSTART;TZID=America/New_York:20260311T110000",
+		"DTEND;TZID=America/New_York:20260311T120000",
+		"END:VEVENT",
+		"BEGIN:VTODO",
+		"UID:task-import@example.com",
+		"SUMMARY:Review notes",
+		"DUE;VALUE=DATE:20260303",
+		"RRULE:FREQ=DAILY;COUNT=2",
+		"PRIORITY:1",
+		"CATEGORIES:planning",
+		"END:VTODO",
+		"BEGIN:VTODO",
+		"UID:task-import@example.com",
+		"RECURRENCE-ID;VALUE=DATE:20260304",
+		"SUMMARY:Review notes",
+		"DUE;VALUE=DATE:20260304",
+		"STATUS:COMPLETED",
+		"COMPLETED:20260304T120000Z",
+		"END:VTODO",
+		"END:VCALENDAR",
+	}, "\r\n")
+
+	first, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionImportICalendar,
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("import first: %v", err)
+	}
+	if first.Rejected || first.ICalendarImport == nil {
+		t.Fatalf("first import = %#v, want import result", first)
+	}
+	if first.ICalendarImport.CalendarCount != 1 || first.ICalendarImport.EventCount != 1 || first.ICalendarImport.TaskCount != 1 || first.ICalendarImport.CreatedCount < 3 {
+		t.Fatalf("first import metadata = %#v", first.ICalendarImport)
+	}
+
+	agenda, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListAgenda,
+		From:   "2026-03-03T00:00:00Z",
+		To:     "2026-03-12T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("list agenda: %v", err)
+	}
+	if agenda.Rejected || len(agenda.Agenda) != 4 {
+		t.Fatalf("agenda = %#v, want original event, moved event, and task occurrences", agenda)
+	}
+	if agenda.Agenda[3].Title != "Weekly sync" || agenda.Agenda[3].StartAt != "2026-03-11T11:00:00-04:00" {
+		t.Fatalf("moved event = %#v, want replacement occurrence", agenda.Agenda[3])
+	}
+
+	updatedContent := strings.Replace(content, "SUMMARY:Weekly sync", "SUMMARY:Weekly planning", 1)
+	second, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionImportICalendar,
+		Content: updatedContent,
+	})
+	if err != nil {
+		t.Fatalf("import second: %v", err)
+	}
+	if second.Rejected || second.ICalendarImport == nil || second.ICalendarImport.UpdatedCount == 0 {
+		t.Fatalf("second import = %#v, want UID-based updates", second)
+	}
+
+	events, err := RunPlanningTask(ctx, options, PlanningTaskRequest{Action: PlanningTaskActionListEvents, CalendarName: "Work"})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events.Events) != 1 || events.Events[0].Title != "Weekly planning" {
+		t.Fatalf("events after reimport = %#v, want one updated event", events.Events)
+	}
+}
+
+func TestRunPlanningTaskImportICalendarRejections(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	limit := 1
+	tests := []PlanningTaskRequest{
+		{Action: PlanningTaskActionImportICalendar},
+		{Action: PlanningTaskActionImportICalendar, Content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR", CalendarID: "not-a-ulid"},
+		{Action: PlanningTaskActionImportICalendar, Content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR", CalendarName: "Work", CalendarID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+		{Action: PlanningTaskActionImportICalendar, Content: "BEGIN:VCALENDAR\r\nEND:VCALENDAR", Limit: &limit},
+		{Action: PlanningTaskActionImportICalendar, Content: "not an ics file"},
+	}
+	for _, request := range tests {
+		result, err := RunPlanningTask(ctx, options, request)
+		if err != nil {
+			t.Fatalf("RunPlanningTask(%#v): %v", request, err)
+		}
+		if !result.Rejected || result.RejectionReason == "" {
+			t.Fatalf("result = %#v, want rejection for %#v", result, request)
+		}
+	}
+}
+
 func TestRunPlanningTaskEventAttendeesRoundTripListAgendaAndUpdate(t *testing.T) {
 	t.Parallel()
 

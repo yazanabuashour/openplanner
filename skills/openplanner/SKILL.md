@@ -46,6 +46,7 @@ Supported routine actions are:
 - `list_pending_reminders`
 - `dismiss_reminder`
 - `export_icalendar`
+- `import_icalendar`
 - `validate`
 
 For event and task creation, prefer `calendar_name`. The runner ensures that
@@ -75,9 +76,10 @@ and task titles can be changed but cannot be cleared.
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
 user explicitly asks for one. iCalendar export is supported through
-`export_icalendar`, which returns `.ics` text in JSON; iCalendar import is not
-supported yet. Event `time_zone` maps to iCalendar `TZID` during export and
-future import work.
+`export_icalendar`, which returns `.ics` text in JSON. iCalendar import is
+supported through `import_icalendar`, which accepts complete `.ics` text in
+`content`; it does not read files directly. Event `time_zone` maps to
+iCalendar `TZID` during export and import.
 
 Tasks support metadata. Use `priority` values `low`, `medium`, or `high`;
 `status` values `todo`, `in_progress`, or `done`; and `tags` as lowercase labels
@@ -209,11 +211,18 @@ Lists:
 {"action":"dismiss_reminder","reminder_occurrence_id":"<id-from-list-pending-reminders-result>"}
 {"action":"export_icalendar"}
 {"action":"export_icalendar","calendar_name":"Work"}
+{"action":"import_icalendar","content":"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n..."}
+{"action":"import_icalendar","calendar_name":"Work","content":"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n..."}
 ```
 
 For export results, use `icalendar.content_type`, `icalendar.filename`,
 `icalendar.event_count`, `icalendar.task_count`, and `icalendar.content`.
 The runner returns complete `.ics` text in JSON and does not write files.
+For import results, use `icalendar_import.calendar_count`,
+`icalendar_import.event_count`, `icalendar_import.task_count`,
+`icalendar_import.created_count`, `icalendar_import.updated_count`,
+`icalendar_import.skipped_count`, and `icalendar_import.skips`. Repeat imports
+update rows by iCalendar UID within the target calendar.
 
 Deletes:
 

@@ -102,6 +102,7 @@ Supported routine actions are:
 - `list_pending_reminders`
 - `dismiss_reminder`
 - `export_icalendar`
+- `import_icalendar`
 - `validate`
 
 Update actions use patch semantics: omitted fields are preserved, non-null
@@ -138,19 +139,28 @@ and `rsvp`. `role` defaults to `required` and accepts `required`, `optional`,
 or `delegated`. Duplicate attendee emails on one event are rejected
 case-insensitively.
 
-The event `time_zone` field maps to iCalendar `TZID` during export and future
-import work. The runner supports iCalendar export with `export_icalendar`;
-iCalendar import is not supported yet.
+The event `time_zone` field maps to iCalendar `TZID` during export and import.
+The runner supports iCalendar export with `export_icalendar` and import with
+`import_icalendar`.
 
 ```json
 {"action":"export_icalendar"}
 {"action":"export_icalendar","calendar_name":"Work"}
+{"action":"import_icalendar","content":"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n..."}
+{"action":"import_icalendar","calendar_name":"Work","content":"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n..."}
 ```
 
 The export action returns an `icalendar` object with `content_type`, `filename`,
 optional calendar metadata, `event_count`, `task_count`, and `content`. The
 `content` value is complete `.ics` text; the runner does not write files
 directly.
+
+The import action accepts complete `.ics` text in `content`; it does not read
+files directly. It imports supported `VEVENT` and `VTODO` fields, recurrence,
+occurrence exceptions, reminders, attendees, task status, priority, and tags.
+Repeat imports update existing rows by iCalendar UID within the target
+calendar. The result includes `icalendar_import` counts for calendars, events,
+tasks, created rows, updated rows, skipped rows, and component skip reasons.
 
 ```json
 {"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","attendees":[{"email":"alex@example.com","display_name":"Alex Rivera","role":"required","participation_status":"accepted","rsvp":true}]}
