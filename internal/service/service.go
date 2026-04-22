@@ -196,6 +196,7 @@ func (service *Service) CreateEvent(input domain.Event) (domain.Event, error) {
 		Location:    sanitizeOptionalString(input.Location),
 		StartAt:     cloneTimePtr(input.StartAt),
 		EndAt:       cloneTimePtr(input.EndAt),
+		TimeZone:    sanitizeOptionalString(input.TimeZone),
 		StartDate:   sanitizeOptionalString(input.StartDate),
 		EndDate:     sanitizeOptionalString(input.EndDate),
 		Recurrence:  cloneRule(input.Recurrence),
@@ -293,6 +294,13 @@ func (service *Service) UpdateEvent(id string, patch domain.EventPatch) (domain.
 			event.EndAt = cloneTimePtr(&patch.EndAt.Value)
 		}
 	}
+	if patch.TimeZone.Present {
+		if patch.TimeZone.Clear {
+			event.TimeZone = nil
+		} else {
+			event.TimeZone = sanitizeOptionalString(&patch.TimeZone.Value)
+		}
+	}
 	if patch.StartDate.Present {
 		if patch.StartDate.Clear {
 			event.StartDate = nil
@@ -327,6 +335,15 @@ func (service *Service) UpdateEvent(id string, patch domain.EventPatch) (domain.
 		} else {
 			event.Attendees = buildEventAttendees(patch.Attendees.Value, service.now())
 		}
+	}
+	if event.StartDate != nil || event.EndDate != nil {
+		if patch.TimeZone.Present && !patch.TimeZone.Clear {
+			return domain.Event{}, &ValidationError{
+				Message:     "event validation failed",
+				FieldErrors: []FieldError{{Field: "timeZone", Message: "timeZone is only supported for timed events"}},
+			}
+		}
+		event.TimeZone = nil
 	}
 	event.UpdatedAt = service.now()
 
@@ -942,7 +959,11 @@ func (service *Service) validateEventOccurrenceMutation(event domain.Event, requ
 		if request.OccurrenceAt == nil || request.OccurrenceDate != nil {
 			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "recurring timed events require occurrenceAt")
 		}
-		if !recurrence.IncludesTimed(*event.StartAt, event.Recurrence, *request.OccurrenceAt) {
+		location := eventLocation(event)
+		if location != nil && !timeOffsetMatchesLocation(*request.OccurrenceAt, location) {
+			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "occurrenceAt offset must match event timeZone")
+		}
+		if !eventIncludesTimedOccurrence(event, *request.OccurrenceAt) {
 			return domain.OccurrenceState{}, occurrenceValidationError("occurrenceAt", "occurrenceAt does not match the recurring event schedule")
 		}
 		state.OccurrenceKey = occurrenceKey(event.ID, request.OccurrenceAt, nil)
@@ -955,6 +976,12 @@ func (service *Service) validateEventOccurrenceMutation(event domain.Event, requ
 		}
 		if request.ReplacementAt == nil || request.ReplacementDate != nil || request.ReplacementEndDate != nil {
 			return domain.OccurrenceState{}, occurrenceValidationError("startAt", "rescheduled timed events require startAt")
+		}
+		if location != nil && !timeOffsetMatchesLocation(*request.ReplacementAt, location) {
+			return domain.OccurrenceState{}, occurrenceValidationError("startAt", "startAt offset must match event timeZone")
+		}
+		if location != nil && request.ReplacementEndAt != nil && !timeOffsetMatchesLocation(*request.ReplacementEndAt, location) {
+			return domain.OccurrenceState{}, occurrenceValidationError("endAt", "endAt offset must match event timeZone")
 		}
 		if request.ReplacementEndAt != nil && !request.ReplacementEndAt.After(*request.ReplacementAt) {
 			return domain.OccurrenceState{}, occurrenceValidationError("endAt", "endAt must be after startAt")
@@ -1068,6 +1095,32 @@ func occurrenceValidationError(field string, message string) error {
 		Message:     "occurrence validation failed",
 		FieldErrors: []FieldError{{Field: field, Message: message}},
 	}
+}
+
+func loadEventLocation(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "Local" {
+		return nil, fmt.Errorf("invalid event timezone")
+	}
+
+	return time.LoadLocation(name)
+}
+
+func timeOffsetMatchesLocation(value time.Time, location *time.Location) bool {
+	_, inputOffset := value.Zone()
+	_, locationOffset := value.In(location).Zone()
+	return inputOffset == locationOffset
+}
+
+func eventLocation(event domain.Event) *time.Location {
+	if event.TimeZone == nil {
+		return nil
+	}
+	location, err := loadEventLocation(*event.TimeZone)
+	if err != nil {
+		return nil
+	}
+	return location
 }
 
 func (service *Service) ListAgenda(params domain.AgendaParams) (domain.Page[domain.AgendaItem], error) {
@@ -1245,6 +1298,22 @@ func validateEvent(event domain.Event) error {
 	}
 	if event.StartAt != nil && event.EndAt != nil && !event.EndAt.After(*event.StartAt) {
 		fieldErrors = append(fieldErrors, FieldError{Field: "endAt", Message: "endAt must be after startAt"})
+	}
+	if event.TimeZone != nil {
+		location, err := loadEventLocation(*event.TimeZone)
+		switch {
+		case err != nil:
+			fieldErrors = append(fieldErrors, FieldError{Field: "timeZone", Message: "timeZone must be a valid IANA timezone"})
+		case !timed || dated:
+			fieldErrors = append(fieldErrors, FieldError{Field: "timeZone", Message: "timeZone is only supported for timed events"})
+		default:
+			if event.StartAt != nil && !timeOffsetMatchesLocation(*event.StartAt, location) {
+				fieldErrors = append(fieldErrors, FieldError{Field: "startAt", Message: "startAt offset must match timeZone"})
+			}
+			if event.EndAt != nil && !timeOffsetMatchesLocation(*event.EndAt, location) {
+				fieldErrors = append(fieldErrors, FieldError{Field: "endAt", Message: "endAt offset must match timeZone"})
+			}
+		}
 	}
 	if event.EndDate != nil && event.StartDate == nil {
 		fieldErrors = append(fieldErrors, FieldError{Field: "startDate", Message: "startDate is required when endDate is provided"})
@@ -1780,6 +1849,8 @@ func agendaItemsForEvent(event domain.Event, states map[string]domain.Occurrence
 
 	switch {
 	case event.StartAt != nil:
+		location := eventLocation(event)
+		startAt := timeInEventLocation(*event.StartAt, location)
 		duration := time.Duration(0)
 		if event.EndAt != nil {
 			duration = event.EndAt.Sub(*event.StartAt)
@@ -1787,9 +1858,9 @@ func agendaItemsForEvent(event domain.Event, states map[string]domain.Occurrence
 
 		var occurrences []time.Time
 		if event.Recurrence != nil {
-			occurrences = recurrence.ExpandTimed(*event.StartAt, event.Recurrence, from.Add(-duration), to)
+			occurrences = expandTimedEventOccurrences(event, from.Add(-duration), to, location)
 		} else {
-			occurrences = []time.Time{*event.StartAt}
+			occurrences = []time.Time{startAt}
 		}
 
 		for _, occurrence := range occurrences {
@@ -1814,6 +1885,7 @@ func agendaItemsForEvent(event domain.Event, states map[string]domain.Occurrence
 				Description:   cloneStringPtr(event.Description),
 				StartAt:       cloneTimePtr(&occurrence),
 				EndAt:         cloneTimePtr(&endAt),
+				TimeZone:      cloneStringPtr(event.TimeZone),
 				Attendees:     cloneEventAttendees(event.Attendees),
 				LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 			}
@@ -1977,7 +2049,7 @@ func eventOccurrenceStateMatchesSchedule(event domain.Event, state domain.Occurr
 	case event.StartAt != nil:
 		return state.OccurrenceAt != nil &&
 			state.OccurrenceDate == nil &&
-			recurrence.IncludesTimed(*event.StartAt, event.Recurrence, *state.OccurrenceAt)
+			eventIncludesTimedOccurrence(event, *state.OccurrenceAt)
 	case event.StartDate != nil:
 		return state.OccurrenceDate != nil &&
 			state.OccurrenceAt == nil &&
@@ -1985,6 +2057,33 @@ func eventOccurrenceStateMatchesSchedule(event domain.Event, state domain.Occurr
 	default:
 		return false
 	}
+}
+
+func eventIncludesTimedOccurrence(event domain.Event, target time.Time) bool {
+	if event.StartAt == nil {
+		return false
+	}
+	if location := eventLocation(event); location != nil {
+		return recurrence.IncludesTimedInLocation(*event.StartAt, event.Recurrence, target, location)
+	}
+	return recurrence.IncludesTimed(*event.StartAt, event.Recurrence, target)
+}
+
+func expandTimedEventOccurrences(event domain.Event, from, to time.Time, location *time.Location) []time.Time {
+	if event.StartAt == nil {
+		return nil
+	}
+	if location != nil {
+		return recurrence.ExpandTimedInLocation(*event.StartAt, event.Recurrence, from, to, location)
+	}
+	return recurrence.ExpandTimed(*event.StartAt, event.Recurrence, from, to)
+}
+
+func timeInEventLocation(value time.Time, location *time.Location) time.Time {
+	if location == nil {
+		return value
+	}
+	return value.In(location)
 }
 
 func taskOccurrenceStateMatchesSchedule(task domain.Task, state domain.OccurrenceState) bool {
@@ -2008,14 +2107,15 @@ func taskOccurrenceStateMatchesSchedule(task domain.Task, state domain.Occurrenc
 
 func rescheduledTimedEventAgendaItems(event domain.Event, states map[string]domain.OccurrenceState, duration time.Duration, from, to time.Time) []domain.AgendaItem {
 	items := []domain.AgendaItem{}
+	location := eventLocation(event)
 	for _, state := range states {
 		if state.Cancelled || state.ReplacementAt == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
 			continue
 		}
-		startAt := *state.ReplacementAt
+		startAt := timeInEventLocation(*state.ReplacementAt, location)
 		endAt := startAt
 		if state.ReplacementEndAt != nil {
-			endAt = *state.ReplacementEndAt
+			endAt = timeInEventLocation(*state.ReplacementEndAt, location)
 		} else if event.EndAt != nil {
 			endAt = startAt.Add(duration)
 		}
@@ -2031,6 +2131,7 @@ func rescheduledTimedEventAgendaItems(event domain.Event, states map[string]doma
 			Description:   cloneStringPtr(event.Description),
 			StartAt:       cloneTimePtr(&startAt),
 			EndAt:         cloneTimePtr(&endAt),
+			TimeZone:      cloneStringPtr(event.TimeZone),
 			Attendees:     cloneEventAttendees(event.Attendees),
 			LinkedTaskIDs: slices.Clone(event.LinkedTaskIDs),
 		}
@@ -2148,6 +2249,7 @@ func pendingRemindersForEvent(event domain.Event, states map[string]domain.Occur
 
 	switch {
 	case event.StartAt != nil:
+		location := eventLocation(event)
 		duration := time.Duration(0)
 		if event.EndAt != nil {
 			duration = event.EndAt.Sub(*event.StartAt)
@@ -2156,9 +2258,9 @@ func pendingRemindersForEvent(event domain.Event, states map[string]domain.Occur
 			offset := time.Duration(reminder.BeforeMinutes) * time.Minute
 			var occurrences []time.Time
 			if event.Recurrence != nil {
-				occurrences = recurrence.ExpandTimed(*event.StartAt, event.Recurrence, from.Add(offset), to.Add(offset))
+				occurrences = expandTimedEventOccurrences(event, from.Add(offset), to.Add(offset), location)
 			} else {
-				occurrences = []time.Time{*event.StartAt}
+				occurrences = []time.Time{timeInEventLocation(*event.StartAt, location)}
 			}
 			for _, occurrence := range occurrences {
 				key := occurrenceKey(event.ID, &occurrence, nil)
@@ -2334,18 +2436,19 @@ func pendingRemindersForTask(task domain.Task, states map[string]domain.Occurren
 
 func rescheduledTimedEventPendingReminders(event domain.Event, states map[string]domain.OccurrenceState, dismissals map[string]map[string]time.Time, reminder domain.ReminderRule, offset time.Duration, duration time.Duration, from, to time.Time) []domain.PendingReminder {
 	items := []domain.PendingReminder{}
+	location := eventLocation(event)
 	for _, state := range states {
 		if state.Cancelled || state.ReplacementAt == nil || !eventOccurrenceStateMatchesSchedule(event, state) {
 			continue
 		}
-		occurrence := *state.ReplacementAt
+		occurrence := timeInEventLocation(*state.ReplacementAt, location)
 		remindAt := occurrence.Add(-offset)
 		if remindAt.Before(from) || !remindAt.Before(to) || reminderDismissed(dismissals, reminder.ID, state.OccurrenceKey) {
 			continue
 		}
 		endAt := occurrence
 		if state.ReplacementEndAt != nil {
-			endAt = *state.ReplacementEndAt
+			endAt = timeInEventLocation(*state.ReplacementEndAt, location)
 		} else if event.EndAt != nil {
 			endAt = occurrence.Add(duration)
 		}

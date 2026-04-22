@@ -62,6 +62,7 @@ type PlanningTaskRequest struct {
 	Location             *string                `json:"location,omitempty"`
 	StartAt              string                 `json:"start_at,omitempty"`
 	EndAt                string                 `json:"end_at,omitempty"`
+	TimeZone             *string                `json:"time_zone,omitempty"`
 	StartDate            string                 `json:"start_date,omitempty"`
 	EndDate              string                 `json:"end_date,omitempty"`
 	DueAt                string                 `json:"due_at,omitempty"`
@@ -147,6 +148,7 @@ type EventEntry struct {
 	Location      *string               `json:"location,omitempty"`
 	StartAt       string                `json:"start_at,omitempty"`
 	EndAt         string                `json:"end_at,omitempty"`
+	TimeZone      *string               `json:"time_zone,omitempty"`
 	StartDate     string                `json:"start_date,omitempty"`
 	EndDate       string                `json:"end_date,omitempty"`
 	Recurrence    *RecurrenceRuleResult `json:"recurrence,omitempty"`
@@ -180,6 +182,7 @@ type AgendaEntry struct {
 	Description    *string              `json:"description,omitempty"`
 	StartAt        string               `json:"start_at,omitempty"`
 	EndAt          string               `json:"end_at,omitempty"`
+	TimeZone       *string              `json:"time_zone,omitempty"`
 	StartDate      string               `json:"start_date,omitempty"`
 	EndDate        string               `json:"end_date,omitempty"`
 	DueAt          string               `json:"due_at,omitempty"`
@@ -316,6 +319,7 @@ var knownPlanningTaskFields = map[string]bool{
 	"location":               true,
 	"start_at":               true,
 	"end_at":                 true,
+	"time_zone":              true,
 	"start_date":             true,
 	"end_date":               true,
 	"due_at":                 true,
@@ -347,6 +351,7 @@ func populatePatchFields(raw map[string]json.RawMessage, request *PlanningTaskRe
 	request.EventPatch.Location = jsonStringPatch(raw, "location")
 	request.EventPatch.StartAt = jsonTimePatch(raw, "start_at")
 	request.EventPatch.EndAt = jsonTimePatch(raw, "end_at")
+	request.EventPatch.TimeZone = jsonStringPatch(raw, "time_zone")
 	request.EventPatch.StartDate = jsonStringPatch(raw, "start_date")
 	request.EventPatch.EndDate = jsonStringPatch(raw, "end_date")
 	request.EventPatch.Recurrence = jsonRecurrencePatch(raw, "recurrence")
@@ -1443,6 +1448,13 @@ func normalizeEventPatchInput(request PlanningTaskRequest) (domain.EventPatch, s
 		}
 		patch.EndAt = domain.SetPatch(endAt)
 	}
+	if !patch.TimeZone.Present && request.TimeZone != nil {
+		timeZone, rejection := normalizeRequiredTimeZone("time_zone", *request.TimeZone)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.TimeZone = domain.SetPatch(timeZone)
+	}
 	if !patch.StartDate.Present && strings.TrimSpace(request.StartDate) != "" {
 		startDate, rejection := parseRequiredDate("start_date", request.StartDate)
 		if rejection != "" {
@@ -1467,6 +1479,26 @@ func normalizeEventPatchInput(request PlanningTaskRequest) (domain.EventPatch, s
 		return domain.EventPatch{}, rejection
 	}
 	patch.EndDate = endDate
+	if patch.TimeZone.Present && !patch.TimeZone.Clear {
+		timeZone, rejection := normalizeRequiredTimeZone("time_zone", patch.TimeZone.Value)
+		if rejection != "" {
+			return domain.EventPatch{}, rejection
+		}
+		patch.TimeZone = domain.SetPatch(timeZone)
+		if (patch.StartDate.Present && !patch.StartDate.Clear) || (patch.EndDate.Present && !patch.EndDate.Clear) {
+			return domain.EventPatch{}, "time_zone is only supported for timed events"
+		}
+		if patch.StartAt.Present && !patch.StartAt.Clear {
+			if rejection := validateTimeOffset("start_at", patch.StartAt.Value, timeZone); rejection != "" {
+				return domain.EventPatch{}, rejection
+			}
+		}
+		if patch.EndAt.Present && !patch.EndAt.Clear {
+			if rejection := validateTimeOffset("end_at", patch.EndAt.Value, timeZone); rejection != "" {
+				return domain.EventPatch{}, rejection
+			}
+		}
+	}
 	if !patch.Recurrence.Present && request.Recurrence != nil {
 		recurrence, rejection := normalizeRecurrence(request.Recurrence, false)
 		if rejection != "" {
@@ -1705,6 +1737,25 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 	if !timed && !dated {
 		return domain.Event{}, "start_at or start_date is required"
 	}
+	timeZone, rejection := normalizeOptionalTimeZone(request.TimeZone)
+	if rejection != "" {
+		return domain.Event{}, rejection
+	}
+	if timeZone != nil && dated {
+		return domain.Event{}, "time_zone is only supported for timed events"
+	}
+	if timeZone != nil {
+		if startAt != nil {
+			if rejection := validateTimeOffset("start_at", *startAt, *timeZone); rejection != "" {
+				return domain.Event{}, rejection
+			}
+		}
+		if endAt != nil {
+			if rejection := validateTimeOffset("end_at", *endAt, *timeZone); rejection != "" {
+				return domain.Event{}, rejection
+			}
+		}
+	}
 	if endAt != nil && startAt == nil {
 		return domain.Event{}, "start_at is required when end_at is provided"
 	}
@@ -1735,6 +1786,7 @@ func normalizeEventInput(request PlanningTaskRequest) (domain.Event, string) {
 		Location:    request.Location,
 		StartAt:     startAt,
 		EndAt:       endAt,
+		TimeZone:    timeZone,
 		StartDate:   startDate,
 		EndDate:     endDate,
 		Recurrence:  recurrence,
@@ -2226,6 +2278,44 @@ func parseOptionalTime(field string, value string) (*time.Time, string) {
 	return &parsed, ""
 }
 
+func normalizeOptionalTimeZone(value *string) (*string, string) {
+	if value == nil {
+		return nil, ""
+	}
+	normalized, rejection := normalizeRequiredTimeZone("time_zone", *value)
+	if rejection != "" {
+		return nil, rejection
+	}
+	return &normalized, ""
+}
+
+func normalizeRequiredTimeZone(field string, value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", field + " must be a valid IANA timezone"
+	}
+	if value == "Local" {
+		return "", field + " must not be Local"
+	}
+	if _, err := time.LoadLocation(value); err != nil {
+		return "", field + " must be a valid IANA timezone"
+	}
+	return value, ""
+}
+
+func validateTimeOffset(field string, value time.Time, timeZone string) string {
+	location, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return field + " time_zone is invalid"
+	}
+	_, inputOffset := value.Zone()
+	_, zoneOffset := value.In(location).Zone()
+	if inputOffset != zoneOffset {
+		return field + " offset must match time_zone"
+	}
+	return ""
+}
+
 func calendarPatchHasUpdate(patch domain.CalendarPatch) bool {
 	return patch.Name.Present || patch.Description.Present || patch.Color.Present
 }
@@ -2236,6 +2326,7 @@ func eventPatchHasUpdate(patch domain.EventPatch) bool {
 		patch.Location.Present ||
 		patch.StartAt.Present ||
 		patch.EndAt.Present ||
+		patch.TimeZone.Present ||
 		patch.StartDate.Present ||
 		patch.EndDate.Present ||
 		patch.Recurrence.Present ||
@@ -2352,6 +2443,7 @@ func eventEntry(event domain.Event) EventEntry {
 		Title:         event.Title,
 		Description:   cloneString(event.Description),
 		Location:      cloneString(event.Location),
+		TimeZone:      cloneString(event.TimeZone),
 		StartDate:     stringValue(event.StartDate),
 		EndDate:       stringValue(event.EndDate),
 		Recurrence:    recurrenceResult(event.Recurrence),
@@ -2440,6 +2532,7 @@ func agendaEntries(items []domain.AgendaItem) []AgendaEntry {
 			SourceID:       item.SourceID,
 			Title:          item.Title,
 			Description:    cloneString(item.Description),
+			TimeZone:       cloneString(item.TimeZone),
 			StartDate:      stringValue(item.StartDate),
 			EndDate:        stringValue(item.EndDate),
 			DueDate:        stringValue(item.DueDate),

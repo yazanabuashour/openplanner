@@ -129,6 +129,111 @@ func TestRunPlanningTaskCreateAndListAgenda(t *testing.T) {
 	}
 }
 
+func TestRunPlanningTaskTimezoneAwareEvents(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t)
+	ctx := context.Background()
+	count := int32(2)
+	timeZone := "America/New_York"
+
+	event, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Weekly sync",
+		StartAt:      "2026-03-03T09:00:00-05:00",
+		TimeZone:     &timeZone,
+		Recurrence: &RecurrenceRuleRequest{
+			Frequency: "weekly",
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+	if event.Rejected || len(event.Events) != 1 || event.Events[0].TimeZone == nil || *event.Events[0].TimeZone != timeZone {
+		t.Fatalf("event result = %#v, want timezone", event)
+	}
+
+	agenda, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action: PlanningTaskActionListAgenda,
+		From:   "2026-03-03T00:00:00Z",
+		To:     "2026-03-11T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("list agenda: %v", err)
+	}
+	if agenda.Rejected || len(agenda.Agenda) != 2 {
+		t.Fatalf("agenda = %#v, want two occurrences", agenda)
+	}
+	if agenda.Agenda[0].StartAt != "2026-03-03T09:00:00-05:00" || agenda.Agenda[1].StartAt != "2026-03-10T09:00:00-04:00" {
+		t.Fatalf("agenda = %#v, want local 09:00 across DST", agenda.Agenda)
+	}
+	if agenda.Agenda[1].TimeZone == nil || *agenda.Agenda[1].TimeZone != timeZone {
+		t.Fatalf("agenda timezone = %#v, want %q", agenda.Agenda[1].TimeZone, timeZone)
+	}
+
+	preserved, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:  PlanningTaskActionUpdateEvent,
+		EventID: event.Events[0].ID,
+		Title:   "Renamed sync",
+	})
+	if err != nil {
+		t.Fatalf("update event preserve timezone: %v", err)
+	}
+	if preserved.Rejected || preserved.Events[0].TimeZone == nil || *preserved.Events[0].TimeZone != timeZone {
+		t.Fatalf("preserved event = %#v, want timezone preserved", preserved)
+	}
+
+	clearJSON := `{"action":"update_event","event_id":"` + event.Events[0].ID + `","time_zone":null}`
+	clearRequest, err := DecodePlanningTaskRequest(bytes.NewBufferString(clearJSON))
+	if err != nil {
+		t.Fatalf("decode timezone clear: %v", err)
+	}
+	cleared, err := RunPlanningTask(ctx, options, clearRequest)
+	if err != nil {
+		t.Fatalf("update event clear timezone: %v", err)
+	}
+	if cleared.Rejected || cleared.Events[0].TimeZone != nil {
+		t.Fatalf("cleared event = %#v, want timezone cleared", cleared)
+	}
+
+	second, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:       PlanningTaskActionCreateEvent,
+		CalendarName: "Work",
+		Title:        "Switch mode",
+		StartAt:      "2026-03-03T09:00:00-05:00",
+		TimeZone:     &timeZone,
+	})
+	if err != nil {
+		t.Fatalf("create switch event: %v", err)
+	}
+	switchJSON := `{"action":"update_event","event_id":"` + second.Events[0].ID + `","start_at":null,"start_date":"2026-03-04"}`
+	switchRequest, err := DecodePlanningTaskRequest(bytes.NewBufferString(switchJSON))
+	if err != nil {
+		t.Fatalf("decode switch event: %v", err)
+	}
+	switched, err := RunPlanningTask(ctx, options, switchRequest)
+	if err != nil {
+		t.Fatalf("update switch event: %v", err)
+	}
+	if switched.Rejected || switched.Events[0].StartDate != "2026-03-04" || switched.Events[0].TimeZone != nil {
+		t.Fatalf("switched event = %#v, want all-day without timezone", switched)
+	}
+
+	rejected, err := RunPlanningTask(ctx, options, PlanningTaskRequest{
+		Action:   PlanningTaskActionUpdateEvent,
+		EventID:  second.Events[0].ID,
+		TimeZone: &timeZone,
+	})
+	if err != nil {
+		t.Fatalf("update all-day timezone: %v", err)
+	}
+	if !rejected.Rejected || rejected.RejectionReason == "" {
+		t.Fatalf("rejected result = %#v, want all-day timezone rejection", rejected)
+	}
+}
+
 func TestRunPlanningTaskOccurrenceActionsAndCompletionKey(t *testing.T) {
 	t.Parallel()
 
@@ -1540,6 +1645,36 @@ func TestRunPlanningTaskValidationRejectionsBeforeDatabaseCreation(t *testing.T)
 				CalendarName: "Work",
 				Title:        "Planning",
 				StartAt:      "2026-04-16 09:00",
+			},
+		},
+		{
+			name: "invalid time zone",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionCreateEvent,
+				CalendarName: "Work",
+				Title:        "Planning",
+				StartAt:      "2026-04-16T09:00:00Z",
+				TimeZone:     stringPtr("Not/AZone"),
+			},
+		},
+		{
+			name: "time zone offset mismatch",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionCreateEvent,
+				CalendarName: "Work",
+				Title:        "Planning",
+				StartAt:      "2026-03-10T09:00:00-05:00",
+				TimeZone:     stringPtr("America/New_York"),
+			},
+		},
+		{
+			name: "all-day time zone",
+			request: PlanningTaskRequest{
+				Action:       PlanningTaskActionCreateEvent,
+				CalendarName: "Work",
+				Title:        "Planning",
+				StartDate:    "2026-04-16",
+				TimeZone:     stringPtr("UTC"),
 			},
 		},
 		{

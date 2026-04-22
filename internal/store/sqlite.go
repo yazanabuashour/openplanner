@@ -205,6 +205,13 @@ var migrations = []migration{
 				ON recurrence_occurrence_states(owner_kind, owner_id);
 		`,
 	},
+	{
+		version: 7,
+		name:    "event time zones",
+		sql: `
+			ALTER TABLE events ADD COLUMN time_zone TEXT;
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -337,12 +344,13 @@ func (store *Store) CreateEvent(event domain.Event) error {
 	_, err = tx.Exec(`
 		INSERT INTO events (
 			id, calendar_id, title, description, location,
-			start_at, end_at, start_date, end_date, recurrence_json,
+			start_at, end_at, time_zone, start_date, end_date, recurrence_json,
 			created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, event.ID, event.CalendarID, event.Title, nullableString(event.Description), nullableString(event.Location),
-		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.StartDate), nullableString(event.EndDate),
+		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.TimeZone),
+		nullableString(event.StartDate), nullableString(event.EndDate),
 		recurrence, formatTime(event.CreatedAt), formatTime(event.UpdatedAt))
 	if err != nil {
 		return mapWriteError(err)
@@ -364,7 +372,7 @@ func (store *Store) CreateEvent(event domain.Event) error {
 func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 	query := `
 		SELECT id, calendar_id, title, description, location, start_at, end_at,
-		       start_date, end_date, recurrence_json, created_at, updated_at
+		       time_zone, start_date, end_date, recurrence_json, created_at, updated_at
 		FROM events
 	`
 	args := []any{}
@@ -401,7 +409,7 @@ func (store *Store) ListEvents(calendarID string) ([]domain.Event, error) {
 func (store *Store) GetEvent(id string) (domain.Event, error) {
 	row := store.db.QueryRow(`
 		SELECT id, calendar_id, title, description, location, start_at, end_at,
-		       start_date, end_date, recurrence_json, created_at, updated_at
+		       time_zone, start_date, end_date, recurrence_json, created_at, updated_at
 		FROM events
 		WHERE id = ?
 	`, id)
@@ -445,11 +453,12 @@ func (store *Store) UpdateEvent(event domain.Event) error {
 
 	result, err := tx.Exec(`
 		UPDATE events
-		SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?,
+		SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?, time_zone = ?,
 		    start_date = ?, end_date = ?, recurrence_json = ?, updated_at = ?
 		WHERE id = ?
 	`, event.Title, nullableString(event.Description), nullableString(event.Location),
-		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.StartDate), nullableString(event.EndDate),
+		nullableTime(event.StartAt), nullableTime(event.EndAt), nullableString(event.TimeZone),
+		nullableString(event.StartDate), nullableString(event.EndDate),
 		recurrence, formatTime(event.UpdatedAt), event.ID)
 	if err != nil {
 		return mapWriteError(err)
@@ -1506,6 +1515,7 @@ func scanEvent(scanner interface {
 		location       sql.NullString
 		startAt        sql.NullString
 		endAt          sql.NullString
+		timeZone       sql.NullString
 		startDate      sql.NullString
 		endDate        sql.NullString
 		recurrenceJSON sql.NullString
@@ -1514,7 +1524,7 @@ func scanEvent(scanner interface {
 	)
 	if err := scanner.Scan(
 		&event.ID, &event.CalendarID, &event.Title, &description, &location,
-		&startAt, &endAt, &startDate, &endDate, &recurrenceJSON, &createdAt, &updatedAt,
+		&startAt, &endAt, &timeZone, &startDate, &endDate, &recurrenceJSON, &createdAt, &updatedAt,
 	); err != nil {
 		return domain.Event{}, err
 	}
@@ -1527,6 +1537,7 @@ func scanEvent(scanner interface {
 	event.Location = parseNullableString(location)
 	event.StartAt = parseNullableTime(startAt)
 	event.EndAt = parseNullableTime(endAt)
+	event.TimeZone = parseNullableString(timeZone)
 	event.StartDate = parseNullableString(startDate)
 	event.EndDate = parseNullableString(endDate)
 	event.Recurrence = recurrence

@@ -74,7 +74,8 @@ and task titles can be changed but cannot be cleared.
 For unsupported OpenPlanner workflows, say the production OpenPlanner skill does
 not support that workflow yet. Do not switch to another interface unless the
 user explicitly asks for one. Import/export is not supported until the installed
-JSON runner ships those actions or fields.
+JSON runner ships those actions. Event `time_zone` is the runner field future
+iCalendar import/export work will map to and from `TZID`.
 
 Tasks support metadata. Use `priority` values `low`, `medium`, or `high`;
 `status` values `todo`, `in_progress`, or `done`; and `tags` as lowercase labels
@@ -88,6 +89,11 @@ cannot be duplicated on one event or task. For pending reminder requests, call
 pending reminder occurrence, call `dismiss_reminder` with the returned
 `reminder_occurrence_id`; repeated dismissals are idempotent.
 
+Timed events may include `time_zone` with an IANA timezone name such as
+`America/New_York`. Keep all timed fields as strict RFC3339 values, and make
+sure their numeric offsets match the named zone. Use `time_zone` only with
+timed event fields, never with all-day event dates.
+
 ## Reject Before Tools
 
 For the cases below, reject or clarify directly without running code, inspecting
@@ -99,6 +105,9 @@ any CLI when the request has:
 | ambiguous short date without year context, like `04/16` | ask for the year |
 | year-first slash date, like `2026/04/16` | require `YYYY-MM-DD` |
 | invalid RFC3339 time, like `2026-04-16 09:00` | require RFC3339 |
+| invalid event timezone, like `Not/AZone` or `Local` | require an IANA timezone |
+| event timezone with all-day fields | require timed event fields |
+| RFC3339 offset that does not match `time_zone` | require a matching offset |
 | missing required event/task title | ask for the title |
 | invalid agenda range where `from` is after `to` | reject the range |
 | unsupported recurrence, like hourly | support only daily, weekly, monthly |
@@ -146,6 +155,7 @@ Events:
 {"action":"create_event","calendar_name":"Personal","title":"Planning day","start_date":"2026-04-17"}
 {"action":"create_event","calendar_name":"Work","title":"Daily standup","start_at":"2026-04-16T09:00:00Z","end_at":"2026-04-16T09:30:00Z","recurrence":{"frequency":"daily","count":3}}
 {"action":"create_event","calendar_name":"Work","title":"Weekly sync","start_at":"2026-04-13T09:00:00Z","end_at":"2026-04-13T09:30:00Z","recurrence":{"frequency":"weekly","by_weekday":["MO","WE"],"count":4}}
+{"action":"create_event","calendar_name":"Work","title":"Weekly New York sync","start_at":"2026-03-03T09:00:00-05:00","time_zone":"America/New_York","recurrence":{"frequency":"weekly","count":2}}
 {"action":"create_event","calendar_name":"Work","title":"Standup","start_at":"2026-04-16T09:00:00Z","reminders":[{"before_minutes":30}]}
 {"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","attendees":[{"email":"alex@example.com","display_name":"Alex Rivera","role":"required","participation_status":"accepted","rsvp":true}]}
 {"action":"update_event","event_id":"<id-from-prior-runner-result>","location":null,"recurrence":null}

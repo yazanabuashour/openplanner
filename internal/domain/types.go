@@ -104,6 +104,7 @@ type Event struct {
 	Location      *string
 	StartAt       *time.Time
 	EndAt         *time.Time
+	TimeZone      *string
 	StartDate     *string
 	EndDate       *string
 	Recurrence    *RecurrenceRule
@@ -120,6 +121,7 @@ type EventPatch struct {
 	Location    PatchField[string]
 	StartAt     PatchField[time.Time]
 	EndAt       PatchField[time.Time]
+	TimeZone    PatchField[string]
 	StartDate   PatchField[string]
 	EndDate     PatchField[string]
 	Recurrence  PatchField[RecurrenceRule]
@@ -276,6 +278,7 @@ type AgendaItem struct {
 	Description    *string
 	StartAt        *time.Time
 	EndAt          *time.Time
+	TimeZone       *string
 	StartDate      *string
 	EndDate        *string
 	DueAt          *time.Time

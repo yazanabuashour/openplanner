@@ -489,6 +489,168 @@ func TestRecurringEventOccurrenceCancellationAndRescheduleAffectAgenda(t *testin
 	}
 }
 
+func TestTimezoneAwareRecurringEventKeepsLocalTimeAcrossSpringDST(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	timeZone := "America/New_York"
+	startAt := time.Date(2026, 3, 3, 9, 0, 0, 0, time.FixedZone("", -5*60*60))
+	count := int32(2)
+
+	_, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Weekly sync",
+		StartAt:    &startAt,
+		TimeZone:   &timeZone,
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyWeekly,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 3, 3, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want two occurrences", page.Items)
+	}
+	if page.Items[0].StartAt == nil || page.Items[0].StartAt.Format(time.RFC3339) != "2026-03-03T09:00:00-05:00" {
+		t.Fatalf("first occurrence = %#v, want 09:00 EST", page.Items[0])
+	}
+	if page.Items[1].StartAt == nil || page.Items[1].StartAt.Format(time.RFC3339) != "2026-03-10T09:00:00-04:00" {
+		t.Fatalf("second occurrence = %#v, want 09:00 EDT", page.Items[1])
+	}
+	if page.Items[1].TimeZone == nil || *page.Items[1].TimeZone != timeZone {
+		t.Fatalf("agenda timezone = %#v, want %q", page.Items[1].TimeZone, timeZone)
+	}
+}
+
+func TestTimezoneAwareRecurringEventKeepsLocalTimeAcrossFallDST(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	timeZone := "America/New_York"
+	startAt := time.Date(2026, 10, 27, 9, 0, 0, 0, time.FixedZone("", -4*60*60))
+	count := int32(2)
+
+	_, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Weekly sync",
+		StartAt:    &startAt,
+		TimeZone:   &timeZone,
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyWeekly,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want two occurrences", page.Items)
+	}
+	if page.Items[0].StartAt == nil || page.Items[0].StartAt.Format(time.RFC3339) != "2026-10-27T09:00:00-04:00" {
+		t.Fatalf("first occurrence = %#v, want 09:00 EDT", page.Items[0])
+	}
+	if page.Items[1].StartAt == nil || page.Items[1].StartAt.Format(time.RFC3339) != "2026-11-03T09:00:00-05:00" {
+		t.Fatalf("second occurrence = %#v, want 09:00 EST", page.Items[1])
+	}
+}
+
+func TestTimezoneAwareEventValidationAndOccurrenceMutation(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	calendar := createCalendar(t, svc)
+	timeZone := "America/New_York"
+	startAt := time.Date(2026, 3, 3, 9, 0, 0, 0, time.FixedZone("", -5*60*60))
+	count := int32(2)
+
+	_, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "All day with zone",
+		StartDate:  stringPtr("2026-03-03"),
+		TimeZone:   &timeZone,
+	})
+	if err == nil {
+		t.Fatal("CreateEvent(all-day timezone) error = nil, want validation error")
+	}
+	var validationErr *service.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("CreateEvent(all-day timezone) error = %T, want ValidationError", err)
+	}
+
+	mismatched := time.Date(2026, 3, 10, 9, 0, 0, 0, time.FixedZone("", -5*60*60))
+	_, err = svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Mismatch",
+		StartAt:    &mismatched,
+		TimeZone:   &timeZone,
+	})
+	if err == nil {
+		t.Fatal("CreateEvent(offset mismatch) error = nil, want validation error")
+	}
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("CreateEvent(offset mismatch) error = %T, want ValidationError", err)
+	}
+
+	event, err := svc.CreateEvent(domain.Event{
+		CalendarID: calendar.ID,
+		Title:      "Weekly sync",
+		StartAt:    &startAt,
+		TimeZone:   &timeZone,
+		Recurrence: &domain.RecurrenceRule{
+			Frequency: domain.RecurrenceFrequencyWeekly,
+			Count:     &count,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	moved, err := svc.RescheduleEventOccurrence(event.ID, domain.OccurrenceMutationRequest{
+		OccurrenceAt:  timePtr(time.Date(2026, 3, 10, 9, 0, 0, 0, time.FixedZone("", -4*60*60))),
+		ReplacementAt: timePtr(time.Date(2026, 3, 11, 10, 0, 0, 0, time.FixedZone("", -4*60*60))),
+	})
+	if err != nil {
+		t.Fatalf("RescheduleEventOccurrence(): %v", err)
+	}
+
+	page, err := svc.ListAgenda(domain.AgendaParams{
+		From:  time.Date(2026, 3, 3, 0, 0, 0, 0, time.UTC),
+		To:    time.Date(2026, 3, 12, 0, 0, 0, 0, time.UTC),
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("agenda items = %#v, want original and moved occurrence", page.Items)
+	}
+	if page.Items[1].OccurrenceKey != moved.OccurrenceKey || page.Items[1].StartAt == nil || page.Items[1].StartAt.Format(time.RFC3339) != "2026-03-11T10:00:00-04:00" {
+		t.Fatalf("moved occurrence = %#v, want stable key at replacement time", page.Items[1])
+	}
+}
+
 func TestRecurringTaskOccurrenceStateAndCompletionByKey(t *testing.T) {
 	t.Parallel()
 
@@ -782,12 +944,14 @@ func TestUpdateEventPatchClearRecurrenceAndSwitchTiming(t *testing.T) {
 	calendar := createCalendar(t, svc)
 	startAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	endAt := startAt.Add(time.Hour)
+	timeZone := "UTC"
 	event, err := svc.CreateEvent(domain.Event{
 		CalendarID:  calendar.ID,
 		Title:       "Standup",
 		Description: stringPtr("Daily sync"),
 		StartAt:     &startAt,
 		EndAt:       &endAt,
+		TimeZone:    &timeZone,
 		Recurrence: &domain.RecurrenceRule{
 			Frequency: domain.RecurrenceFrequencyDaily,
 			Count:     int32Ptr(3),
@@ -821,8 +985,8 @@ func TestUpdateEventPatchClearRecurrenceAndSwitchTiming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateEvent(switch all-day): %v", err)
 	}
-	if allDay.StartAt != nil || allDay.EndAt != nil || allDay.StartDate == nil || *allDay.StartDate != startDate {
-		t.Fatalf("all-day event = %#v, want timed fields cleared and start_date set", allDay)
+	if allDay.StartAt != nil || allDay.EndAt != nil || allDay.TimeZone != nil || allDay.StartDate == nil || *allDay.StartDate != startDate {
+		t.Fatalf("all-day event = %#v, want timed fields and timezone cleared with start_date set", allDay)
 	}
 
 	_, err = svc.UpdateEvent(event.ID, domain.EventPatch{

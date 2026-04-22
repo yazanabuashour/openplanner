@@ -113,10 +113,17 @@ reschedules without changing the base recurrence rule. Use `occurrence_at` for
 timed occurrences and `occurrence_date` for all-day events or date-based tasks.
 Agenda entries keep a stable `occurrence_key` based on the original occurrence;
 use that key with `complete_task` when completing a moved recurring task.
+Timed events may include `time_zone` with an IANA timezone name such as
+`America/New_York`. The `start_at`, `end_at`, `occurrence_at`, and replacement
+timed fields still must be strict RFC3339 values, and their numeric offsets must
+match the named zone. Timezone-aware recurring events keep their local wall-clock
+time across DST transitions. All-day events remain date-only and do not accept
+`time_zone`.
 
 ```json
 {"action":"cancel_event_occurrence","event_id":"<event-id>","occurrence_at":"2026-04-17T09:00:00Z"}
 {"action":"reschedule_event_occurrence","event_id":"<event-id>","occurrence_at":"2026-04-18T09:00:00Z","start_at":"2026-04-19T11:00:00Z"}
+{"action":"create_event","calendar_name":"Work","title":"Weekly sync","start_at":"2026-03-03T09:00:00-05:00","time_zone":"America/New_York","recurrence":{"frequency":"weekly","count":2}}
 {"action":"cancel_task_occurrence","task_id":"<task-id>","occurrence_date":"2026-04-17"}
 {"action":"reschedule_task_occurrence","task_id":"<task-id>","occurrence_date":"2026-04-18","due_date":"2026-04-19"}
 {"action":"complete_task","task_id":"<task-id>","occurrence_key":"<key-from-list-agenda-result>"}
@@ -129,6 +136,10 @@ and `rsvp`. `role` defaults to `required` and accepts `required`, `optional`,
 `needs_action` and accepts `needs_action`, `accepted`, `declined`, `tentative`,
 or `delegated`. Duplicate attendee emails on one event are rejected
 case-insensitively.
+
+The event `time_zone` field is also the storage and runner field future
+iCalendar import/export work will map to and from `TZID`. The runner does not
+support import or export actions yet.
 
 ```json
 {"action":"create_event","calendar_name":"Work","title":"Planning","start_at":"2026-04-16T09:00:00Z","attendees":[{"email":"alex@example.com","display_name":"Alex Rivera","role":"required","participation_status":"accepted","rsvp":true}]}

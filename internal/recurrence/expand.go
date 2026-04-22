@@ -34,6 +34,23 @@ func ExpandTimed(anchor time.Time, rule *domain.RecurrenceRule, from, to time.Ti
 	return expandTimed(anchor, NormalizeRule(rule), from, to)
 }
 
+func ExpandTimedInLocation(anchor time.Time, rule *domain.RecurrenceRule, from, to time.Time, location *time.Location) []time.Time {
+	if location == nil {
+		return ExpandTimed(anchor, rule, from, to)
+	}
+
+	localAnchor := anchor.In(location)
+	if rule == nil {
+		if occursInRange(localAnchor, localAnchor, from, to) {
+			return []time.Time{localAnchor}
+		}
+
+		return nil
+	}
+
+	return expandTimedInLocation(localAnchor, NormalizeRule(rule), from, to)
+}
+
 func ExpandDate(anchor string, rule *domain.RecurrenceRule, from, to time.Time) []string {
 	anchorTime, err := parseDate(anchor)
 	if err != nil {
@@ -61,6 +78,19 @@ func IncludesTimed(anchor time.Time, rule *domain.RecurrenceRule, target time.Ti
 	return false
 }
 
+func IncludesTimedInLocation(anchor time.Time, rule *domain.RecurrenceRule, target time.Time, location *time.Location) bool {
+	if location == nil {
+		return IncludesTimed(anchor, rule, target)
+	}
+	for _, occurrence := range expandTimedInLocation(anchor.In(location), NormalizeRule(rule), anchor.Add(-time.Second), target.Add(time.Second)) {
+		if occurrence.Equal(target) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func IncludesDate(anchor string, rule *domain.RecurrenceRule, target string) bool {
 	targetTime, err := parseDate(target)
 	if err != nil {
@@ -77,13 +107,21 @@ func IncludesDate(anchor string, rule *domain.RecurrenceRule, target string) boo
 }
 
 func expandTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time) []time.Time {
+	return expandTimedWithOptions(anchor, rule, from, to, false)
+}
+
+func expandTimedInLocation(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time) []time.Time {
+	return expandTimedWithOptions(anchor, rule, from, to, true)
+}
+
+func expandTimedWithOptions(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time, localUntilDate bool) []time.Time {
 	switch rule.Frequency {
 	case domain.RecurrenceFrequencyDaily:
-		return expandDailyTimed(anchor, rule, from, to)
+		return expandDailyTimed(anchor, rule, from, to, localUntilDate)
 	case domain.RecurrenceFrequencyWeekly:
-		return expandWeeklyTimed(anchor, rule, from, to)
+		return expandWeeklyTimed(anchor, rule, from, to, localUntilDate)
 	case domain.RecurrenceFrequencyMonthly:
-		return expandMonthlyTimed(anchor, rule, from, to)
+		return expandMonthlyTimed(anchor, rule, from, to, localUntilDate)
 	default:
 		return nil
 	}
@@ -102,11 +140,11 @@ func expandDate(anchorTime time.Time, anchor string, rule domain.RecurrenceRule,
 	}
 }
 
-func expandDailyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time) []time.Time {
+func expandDailyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time, localUntilDate bool) []time.Time {
 	var results []time.Time
 
 	for occurrence, index := anchor, int32(1); len(results) < maxOccurrences; occurrence, index = occurrence.AddDate(0, 0, int(rule.Interval)), index+1 {
-		if !withinRuleTimedBounds(occurrence, rule, index) {
+		if !withinRuleTimedBounds(occurrence, rule, index, localUntilDate) {
 			break
 		}
 		if occursInRange(occurrence, occurrence, from, to) {
@@ -132,7 +170,7 @@ func expandDailyDate(anchor time.Time, rule domain.RecurrenceRule, from, to time
 	return results
 }
 
-func expandWeeklyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time) []time.Time {
+func expandWeeklyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time, localUntilDate bool) []time.Time {
 	weekdays := normalizedWeekdays(rule.ByWeekday, anchor.Weekday())
 	weekStart := startOfWeek(anchor)
 	var results []time.Time
@@ -146,7 +184,7 @@ func expandWeeklyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to ti
 			}
 
 			index++
-			if !withinRuleTimedBounds(occurrence, rule, index) {
+			if !withinRuleTimedBounds(occurrence, rule, index, localUntilDate) {
 				return results
 			}
 			if occursInRange(occurrence, occurrence, from, to) {
@@ -184,7 +222,7 @@ func expandWeeklyDate(anchor time.Time, rule domain.RecurrenceRule, from, to tim
 	return results
 }
 
-func expandMonthlyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time) []time.Time {
+func expandMonthlyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to time.Time, localUntilDate bool) []time.Time {
 	days := normalizedMonthDays(rule.ByMonthDay, anchor.Day())
 	var results []time.Time
 	index := int32(0)
@@ -197,7 +235,7 @@ func expandMonthlyTimed(anchor time.Time, rule domain.RecurrenceRule, from, to t
 			}
 
 			index++
-			if !withinRuleTimedBounds(occurrence, rule, index) {
+			if !withinRuleTimedBounds(occurrence, rule, index, localUntilDate) {
 				return results
 			}
 			if occursInRange(occurrence, occurrence, from, to) {
@@ -238,7 +276,7 @@ func occursInRange(start, end, from, to time.Time) bool {
 	return start.Before(to) && !end.Before(from)
 }
 
-func withinRuleTimedBounds(occurrence time.Time, rule domain.RecurrenceRule, index int32) bool {
+func withinRuleTimedBounds(occurrence time.Time, rule domain.RecurrenceRule, index int32, localUntilDate bool) bool {
 	if rule.Count != nil && index > *rule.Count {
 		return false
 	}
@@ -250,7 +288,11 @@ func withinRuleTimedBounds(occurrence time.Time, rule domain.RecurrenceRule, ind
 		if err != nil {
 			return false
 		}
-		if !occurrence.Before(untilDate.AddDate(0, 0, 1)) {
+		untilEnd := untilDate.AddDate(0, 0, 1)
+		if localUntilDate {
+			untilEnd = time.Date(untilDate.Year(), untilDate.Month(), untilDate.Day()+1, 0, 0, 0, 0, occurrence.Location())
+		}
+		if !occurrence.Before(untilEnd) {
 			return false
 		}
 	}

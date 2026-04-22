@@ -25,7 +25,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"event_attendees",
@@ -47,6 +47,21 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"tasks_priority_idx",
 		"tasks_status_idx",
 	})
+	assertTableColumns(t, repository.db, "events", []string{
+		"id",
+		"calendar_id",
+		"title",
+		"description",
+		"location",
+		"start_at",
+		"end_at",
+		"start_date",
+		"end_date",
+		"recurrence_json",
+		"created_at",
+		"updated_at",
+		"time_zone",
+	})
 }
 
 func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
@@ -65,7 +80,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -81,6 +96,9 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].ID != "event-legacy" || events[0].Title != "Legacy event" {
 		t.Fatalf("events = %#v, want legacy event", events)
+	}
+	if events[0].TimeZone != nil {
+		t.Fatalf("legacy event timezone = %#v, want nil", events[0].TimeZone)
 	}
 
 	tasks, err := repository.ListTasks(domain.TaskListParams{})
@@ -138,7 +156,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6, 7})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -161,7 +179,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (7);
+		INSERT INTO schema_migrations (version) VALUES (8);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -174,7 +192,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 7 is newer than supported version 6") {
+	if !strings.Contains(err.Error(), "database schema version 8 is newer than supported version 7") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
 	}
 }
@@ -204,6 +222,70 @@ func TestOpenBackfillsCompletedLegacyTaskStatus(t *testing.T) {
 	}
 	if tasks[0].Status != domain.TaskStatusDone || tasks[0].Priority != domain.TaskPriorityMedium {
 		t.Fatalf("task metadata = priority:%q status:%q, want medium/done", tasks[0].Priority, tasks[0].Status)
+	}
+}
+
+func TestEventTimeZonePersistsUpdatesAndClears(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	calendar := domain.Calendar{ID: "cal-timezone", Name: "Timezone", CreatedAt: now, UpdatedAt: now}
+	if err := repository.CreateCalendar(calendar); err != nil {
+		t.Fatalf("CreateCalendar(): %v", err)
+	}
+
+	startAt := time.Date(2026, 3, 3, 9, 0, 0, 0, time.FixedZone("", -5*60*60))
+	timeZone := "America/New_York"
+	event := domain.Event{
+		ID:         "event-timezone",
+		CalendarID: calendar.ID,
+		Title:      "Planning",
+		StartAt:    &startAt,
+		TimeZone:   &timeZone,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repository.CreateEvent(event); err != nil {
+		t.Fatalf("CreateEvent(): %v", err)
+	}
+
+	stored, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(): %v", err)
+	}
+	if stored.TimeZone == nil || *stored.TimeZone != timeZone {
+		t.Fatalf("stored timezone = %#v, want %q", stored.TimeZone, timeZone)
+	}
+
+	events, err := repository.ListEvents("")
+	if err != nil {
+		t.Fatalf("ListEvents(): %v", err)
+	}
+	if len(events) != 1 || events[0].TimeZone == nil || *events[0].TimeZone != timeZone {
+		t.Fatalf("listed events = %#v, want timezone", events)
+	}
+
+	event.TimeZone = nil
+	event.UpdatedAt = now.Add(time.Minute)
+	if err := repository.UpdateEvent(event); err != nil {
+		t.Fatalf("UpdateEvent(clear timezone): %v", err)
+	}
+	cleared, err := repository.GetEvent(event.ID)
+	if err != nil {
+		t.Fatalf("GetEvent(cleared): %v", err)
+	}
+	if cleared.TimeZone != nil {
+		t.Fatalf("cleared timezone = %#v, want nil", cleared.TimeZone)
 	}
 }
 
@@ -824,6 +906,40 @@ func assertSchemaObjects(t *testing.T, db *sql.DB, want []string) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("schema objects = %v, want %v", got, want)
+	}
+}
+
+func assertTableColumns(t *testing.T, db *sql.DB, table string, want []string) {
+	t.Helper()
+
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("query table info for %s: %v", table, err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Fatalf("Close(rows): %v", err)
+		}
+	}()
+
+	var got []string
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan table column: %v", err)
+		}
+		got = append(got, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table columns: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s columns = %v, want %v", table, got, want)
 	}
 }
 
