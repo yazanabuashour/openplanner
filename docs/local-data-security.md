@@ -29,9 +29,10 @@ Agents and users choose where to store exported content.
 
 The experimental `openplanner caldav` adapter uses the same local SQLite-backed
 service and the same database path precedence rules. It is unauthenticated,
-does not provide TLS, and exists for local compatibility research. It should be
-bound only to loopback addresses such as `127.0.0.1:<port>` and must not be
-promoted to exposed network use until `op-d7k` is complete.
+does not provide TLS, and exists for local compatibility research. It is
+loopback-only: bind addresses must be `localhost:<port>` or loopback IP
+literals such as `127.0.0.1:<port>` or `[::1]:<port>`. Non-loopback, wildcard,
+and empty-host bind addresses are rejected.
 
 ## Sensitive Data
 
@@ -97,7 +98,7 @@ Remaining hardening:
 
 - Add bounded input handling in `op-xge`.
 - Add parser-focused fuzz and regression coverage in `op-5gj`.
-- Keep CalDAV experimental and loopback-only until `op-d7k` is complete.
+- Keep CalDAV experimental and loopback-only.
 
 ### Parser And Server Denial Of Service
 
@@ -113,11 +114,13 @@ Track this work in `op-xge` and parser hardening tests in `op-5gj`.
 ### Cross-Calendar Leakage
 
 CalDAV listing and object reads expose local calendar data to any client that
-can reach the adapter. Within the adapter, object resolution should remain
+can reach the adapter. The adapter rejects non-loopback bind addresses so this
+surface remains local-only. Within the adapter, object resolution should remain
 scoped to the target calendar, and `calendar-multiget` requests for missing or
 cross-calendar hrefs should return not-found properties instead of content.
-Existing tests cover those baseline behaviors. Broader access control,
-authentication, and transport decisions belong to `op-d7k`.
+Existing tests cover those baseline behaviors. Any future remote calendar
+service would need a separate product decision and design for access control,
+authentication, and transport.
 
 ### Maintainer And Supply-Chain Security
 
@@ -161,14 +164,14 @@ Security-specific follow-ups:
 
 - `op-xge`: bound local planning parser and server inputs.
 - `op-5gj`: add parser hardening fuzz and regression coverage.
-- `op-d7k`: harden CalDAV before non-loopback exposure.
+- `op-d7k`: enforce loopback-only CalDAV local compatibility mode.
 - `op-6g9`: ensure private permissions for local OpenPlanner data files.
 
 ## Operational Guidance
 
 - Prefer the JSON runner for normal local planning work.
 - Keep CalDAV disabled unless actively testing local client compatibility.
-- Bind CalDAV to loopback only.
+- Bind CalDAV to loopback only; non-loopback bind addresses are rejected.
 - Stop active runner and CalDAV usage before backing up or restoring the
   database.
 - Store database backups and iCalendar exports only in locations covered by the

@@ -108,6 +108,9 @@ func ListenAndServe(ctx context.Context, options Options) error {
 	if options.Addr == "" {
 		options.Addr = defaultAddr
 	}
+	if err := ValidateAddr(options.Addr); err != nil {
+		return err
+	}
 	runtime, err := Open(options)
 	if err != nil {
 		return err
@@ -135,6 +138,21 @@ func ListenAndServe(ctx context.Context, options Options) error {
 		return fmt.Errorf("serve caldav: %w", err)
 	}
 	return nil
+}
+
+func ValidateAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("parse caldav addr: %w", err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("caldav addr must bind to localhost or a loopback IP")
 }
 
 func Open(options Options) (*runtime, error) {

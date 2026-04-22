@@ -1,8 +1,10 @@
 package caldav
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +40,68 @@ func createCalendar(t *testing.T, svc *service.Service) domain.Calendar {
 		t.Fatalf("CreateCalendar(): %v", err)
 	}
 	return calendar
+}
+
+func TestValidateAddrAcceptsLoopback(t *testing.T) {
+	t.Parallel()
+
+	for _, addr := range []string{
+		"127.0.0.1:0",
+		"127.0.0.2:8080",
+		"[::1]:8080",
+		"localhost:8080",
+	} {
+		addr := addr
+		t.Run(addr, func(t *testing.T) {
+			t.Parallel()
+
+			if err := ValidateAddr(addr); err != nil {
+				t.Fatalf("ValidateAddr(%q): %v", addr, err)
+			}
+		})
+	}
+}
+
+func TestValidateAddrRejectsNonLoopback(t *testing.T) {
+	t.Parallel()
+
+	for _, addr := range []string{
+		":8080",
+		"0.0.0.0:8080",
+		"[::]:8080",
+		"192.168.1.10:8080",
+		"8.8.8.8:8080",
+		"calendar.local:8080",
+	} {
+		addr := addr
+		t.Run(addr, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateAddr(addr)
+			if err == nil {
+				t.Fatalf("ValidateAddr(%q) succeeded, want rejection", addr)
+			}
+			if !strings.Contains(err.Error(), "loopback") {
+				t.Fatalf("ValidateAddr(%q) error = %q, want loopback rejection", addr, err)
+			}
+		})
+	}
+}
+
+func TestListenAndServeRejectsNonLoopbackBeforeOpeningDatabase(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "caldav.db")
+	err := ListenAndServe(context.Background(), Options{Addr: "0.0.0.0:8080", DatabasePath: databasePath})
+	if err == nil {
+		t.Fatal("ListenAndServe succeeded, want non-loopback rejection")
+	}
+	if !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("ListenAndServe error = %q, want loopback rejection", err)
+	}
+	if _, statErr := os.Stat(databasePath); !os.IsNotExist(statErr) {
+		t.Fatalf("database path exists after rejected addr: %v", statErr)
+	}
 }
 
 func TestPropfindDiscoveryAndCollections(t *testing.T) {

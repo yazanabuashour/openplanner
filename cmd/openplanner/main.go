@@ -88,6 +88,11 @@ func runCalDAV(args []string, stderr io.Writer) int {
 		resolvedDatabasePath = os.Getenv("OPENPLANNER_DATABASE_PATH")
 	}
 
+	if err := caldav.ValidateAddr(*addr); err != nil {
+		_, _ = fmt.Fprintf(stderr, "invalid caldav addr: %v\n", err)
+		return 2
+	}
+
 	_, _ = fmt.Fprintf(stderr, "serving experimental CalDAV adapter on %s\n", *addr)
 	if err := serveCalDAV(context.Background(), caldav.Options{Addr: *addr, DatabasePath: resolvedDatabasePath}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "serve caldav: %v\n", err)

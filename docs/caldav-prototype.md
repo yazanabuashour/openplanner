@@ -15,10 +15,11 @@ The adapter uses the same SQLite-backed service as the JSON runner. `--db`
 overrides `OPENPLANNER_DATABASE_PATH`; when both are absent, the default
 OpenPlanner data path is used.
 
-The adapter is unauthenticated and has no TLS story. Bind it to loopback
-addresses such as `127.0.0.1:<port>` for local compatibility testing only. The
-local data threat model and non-loopback hardening blocker are documented in
-[`docs/local-data-security.md`](local-data-security.md).
+The adapter is unauthenticated and has no TLS story. It is loopback-only local
+compatibility tooling: bind addresses must be `localhost:<port>` or loopback IP
+literals such as `127.0.0.1:<port>` or `[::1]:<port>`. Non-loopback, wildcard,
+and empty-host bind addresses are rejected. The local data threat model is
+documented in [`docs/local-data-security.md`](local-data-security.md).
 
 ## Prototype Surface
 
@@ -88,9 +89,8 @@ curl -i -X DELETE http://127.0.0.1:8080/caldav/calendars/local/<calendar-id>/cli
 - No authentication, TLS, scheduling inbox/outbox, sharing, sync-token,
   `If-Match` enforcement, collection mutation, principal management, free-busy,
   or full client compatibility promise.
-- No non-loopback exposure policy. Keep the adapter local-only until the
-  hardening work tracked from [`docs/local-data-security.md`](local-data-security.md)
-  is complete.
+- No remote exposure mode. The adapter rejects non-loopback bind addresses and
+  remains local UI/client compatibility tooling.
 - No background daemon, hosted service, or public REST-style compatibility
   contract is introduced.
 - URL/resource identity is best effort. Server-originated resources use

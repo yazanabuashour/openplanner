@@ -202,6 +202,34 @@ func TestCalDAVRunnerUsesDatabaseEnvWhenDBFlagOmitted(t *testing.T) {
 	}
 }
 
+func TestCalDAVRunnerRejectsNonLoopbackAddrBeforeServing(t *testing.T) {
+	var called bool
+	oldServe := serveCalDAV
+	serveCalDAV = func(_ context.Context, _ caldav.Options) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() {
+		serveCalDAV = oldServe
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"caldav", "--addr", "0.0.0.0:8080"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatal("exit = 0, want non-zero")
+	}
+	if called {
+		t.Fatal("serveCalDAV was called for rejected non-loopback addr")
+	}
+	if !strings.Contains(stderr.String(), "loopback") {
+		t.Fatalf("stderr = %q, want loopback rejection", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func TestCalDAVRunnerRejectsPositionalArguments(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
