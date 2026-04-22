@@ -167,6 +167,43 @@ func TestBuildEventTaskRecurrenceExceptionsRemindersAndAttendees(t *testing.T) {
 	assertContains(t, unfolded, "RECURRENCE-ID;VALUE=DATE:20260516\r\nSUMMARY:Review notes\r\nDUE;VALUE=DATE:20260517\r\nSTATUS:COMPLETED")
 }
 
+func TestBuildPreservesStoredICalendarUID(t *testing.T) {
+	eventUID := "event-1@example.com"
+	taskUID := "task-1@example.com"
+	event := domain.Event{
+		ID:           "event-1",
+		CalendarID:   "calendar-1",
+		ICalendarUID: &eventUID,
+		Title:        "Imported event",
+		StartDate:    stringPtr("2026-04-16"),
+		CreatedAt:    fixedTime(),
+		UpdatedAt:    fixedTime(),
+	}
+	task := domain.Task{
+		ID:           "task-1",
+		CalendarID:   "calendar-1",
+		ICalendarUID: &taskUID,
+		Title:        "Imported task",
+		DueDate:      stringPtr("2026-04-16"),
+		CreatedAt:    fixedTime(),
+		UpdatedAt:    fixedTime(),
+	}
+
+	result := Build(Export{
+		Calendars:   []domain.Calendar{{ID: "calendar-1", Name: "Work"}},
+		Events:      []domain.Event{event},
+		Tasks:       []domain.Task{task},
+		GeneratedAt: fixedTime(),
+	})
+	unfolded := unfold(result.Content)
+
+	assertContains(t, unfolded, "BEGIN:VEVENT\r\nUID:event-1@example.com")
+	assertContains(t, unfolded, "BEGIN:VTODO\r\nUID:task-1@example.com")
+	if strings.Contains(unfolded, "UID:event-1@openplanner.local") || strings.Contains(unfolded, "UID:task-1@openplanner.local") {
+		t.Fatalf("unfolded content = %q, want stored iCalendar UIDs", unfolded)
+	}
+}
+
 func TestBuildAllDayEventUsesExclusiveDTEND(t *testing.T) {
 	event := domain.Event{
 		ID:         "event-1",

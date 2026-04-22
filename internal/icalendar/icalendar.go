@@ -102,7 +102,7 @@ func Build(input Export) Result {
 
 func writeEvent(writer *writer, event domain.Event, calendar *domain.Calendar, states map[string]domain.OccurrenceState, generatedAt time.Time, override *domain.OccurrenceState) {
 	writer.property("BEGIN", "VEVENT")
-	writer.property("UID", uid(event.ID))
+	writer.property("UID", uid(event.ID, event.ICalendarUID))
 	writer.property("DTSTAMP", formatUTC(generatedAt))
 	writer.property("CREATED", formatUTC(event.CreatedAt))
 	writer.property("LAST-MODIFIED", formatUTC(event.UpdatedAt))
@@ -133,7 +133,7 @@ func writeEvent(writer *writer, event domain.Event, calendar *domain.Calendar, s
 
 func writeTask(writer *writer, task domain.Task, calendar *domain.Calendar, states map[string]domain.OccurrenceState, completions map[string]domain.TaskCompletion, generatedAt time.Time, override *domain.OccurrenceState, completion *domain.TaskCompletion) {
 	writer.property("BEGIN", "VTODO")
-	writer.property("UID", uid(task.ID))
+	writer.property("UID", uid(task.ID, task.ICalendarUID))
 	writer.property("DTSTAMP", formatUTC(generatedAt))
 	writer.property("CREATED", formatUTC(task.CreatedAt))
 	writer.property("LAST-MODIFIED", formatUTC(task.UpdatedAt))
@@ -430,7 +430,12 @@ func writeTaskMetadata(writer *writer, task domain.Task, calendar *domain.Calend
 	}
 }
 
-func uid(id string) string {
+func uid(id string, icalendarUID *string) string {
+	if icalendarUID != nil {
+		if value := strings.TrimSpace(*icalendarUID); value != "" {
+			return value
+		}
+	}
 	return id + "@openplanner.local"
 }
 
