@@ -35,8 +35,12 @@ Supported methods are minimal:
 ## Smoke Results
 
 Local scripted smoke coverage uses `curl` against the local adapter. Practical
-client compatibility with Apple Calendar, DAVx5, Thunderbird, khal, or todoman
-is tracked separately by `op-2vv.15`.
+client compatibility results are recorded in
+[`docs/caldav-client-compatibility.md`](caldav-client-compatibility.md).
+`op-2vv.15` found the prototype compatible with the baseline curl surface and
+partially compatible with vdirsyncer-backed khal/todoman workflows, but not
+viable as the v1 migration path until sync-client semantics and GUI client
+setup are hardened.
 
 | Client | Scope | Result |
 | --- | --- | --- |
