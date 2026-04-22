@@ -86,6 +86,20 @@ type calendarQuery struct {
 	to            time.Time
 }
 
+type reportKind int
+
+const (
+	reportCalendarQuery reportKind = iota
+	reportCalendarMultiget
+)
+
+type reportRequest struct {
+	kind      reportKind
+	query     calendarQuery
+	hrefs     []string
+	requested []xml.Name
+}
+
 func NewServer(service *service.Service) *Server {
 	return &Server{service: service}
 }
@@ -256,13 +270,17 @@ func (server *Server) handleReport(writer http.ResponseWriter, request *http.Req
 		http.Error(writer, "REPORT is only supported for calendar collections", http.StatusMethodNotAllowed)
 		return
 	}
-	query, err := parseCalendarQuery(request.Body)
+	report, err := parseReport(request.Body)
 	if err != nil {
-		http.Error(writer, "invalid calendar-query REPORT", http.StatusBadRequest)
+		http.Error(writer, "invalid REPORT", http.StatusBadRequest)
+		return
+	}
+	if report.kind == reportCalendarMultiget {
+		server.handleCalendarMultiget(writer, routeTarget, report)
 		return
 	}
 
-	objects, err := server.queryObjects(routeTarget.calendarID, query)
+	objects, err := server.queryObjects(routeTarget.calendarID, report.query)
 	if err != nil {
 		writeServiceError(writer, err)
 		return
@@ -283,6 +301,47 @@ func (server *Server) handleReport(writer http.ResponseWriter, request *http.Req
 			},
 		})
 	}
+	writeMultiStatus(writer, responses)
+}
+
+func (server *Server) handleCalendarMultiget(writer http.ResponseWriter, routeTarget target, report reportRequest) {
+	requested := report.requested
+	if len(requested) == 0 {
+		requested = []xml.Name{davName("getetag"), caldavName("calendar-data")}
+	}
+
+	responses := make([]response, 0, len(report.hrefs))
+	for _, href := range report.hrefs {
+		hrefTarget, ok := targetForHref(href)
+		if !ok || hrefTarget.kind != targetCalendarObject || hrefTarget.calendarID != routeTarget.calendarID {
+			responses = append(responses, response{href: href, notFound: requested})
+			continue
+		}
+
+		export, err := server.service.ExportICalendarObject(hrefTarget.calendarID, hrefTarget.resource)
+		if err != nil {
+			var notFoundErr *service.NotFoundError
+			if errors.As(err, &notFoundErr) {
+				responses = append(responses, response{href: hrefTarget.href, notFound: requested})
+				continue
+			}
+			writeServiceError(writer, err)
+			return
+		}
+
+		supported := append(calendarObjectProperties(export), propertyValue{name: caldavName("calendar-data"), text: export.Content})
+		okProps := []propertyValue{}
+		notFound := []xml.Name{}
+		for _, requestedName := range requested {
+			if value, ok := findProperty(supported, requestedName); ok {
+				okProps = append(okProps, value)
+				continue
+			}
+			notFound = append(notFound, requestedName)
+		}
+		responses = append(responses, response{href: hrefTarget.href, ok: okProps, notFound: notFound})
+	}
+
 	writeMultiStatus(writer, responses)
 }
 
@@ -337,14 +396,24 @@ func (server *Server) handlePut(writer http.ResponseWriter, request *http.Reques
 	}
 
 	status := http.StatusNoContent
+	canonicalResource := target.resource
 	for _, write := range imported.Writes {
-		if (write.Kind == "event" || write.Kind == "task") && write.Status == "created" {
-			status = http.StatusCreated
-			if write.ID != "" {
-				writer.Header().Set("Location", objectHref(target.calendarID, write.ID+".ics"))
+		if write.Kind != "event" && write.Kind != "task" {
+			continue
+		}
+		if write.ID != "" {
+			if object, err := server.service.ResolveICalendarObject(target.calendarID, write.ID+".ics"); err == nil {
+				canonicalResource = object.ResourceName()
 			}
+		}
+		if write.Status == "created" {
+			status = http.StatusCreated
 			break
 		}
+	}
+	if export, err := server.service.ExportICalendarObject(target.calendarID, canonicalResource); err == nil {
+		writer.Header().Set("ETag", etag(export.Content))
+		writer.Header().Set("Location", objectHref(target.calendarID, canonicalResource))
 	}
 	writer.WriteHeader(status)
 }
@@ -421,11 +490,7 @@ func (server *Server) propertiesForTarget(target target) ([]propertyValue, error
 		if err != nil {
 			return nil, err
 		}
-		return []propertyValue{
-			{name: davName("getcontenttype"), text: export.ContentType},
-			{name: davName("getcontentlength"), text: fmt.Sprintf("%d", len(export.Content))},
-			{name: davName("getetag"), text: etag(export.Content)},
-		}, nil
+		return calendarObjectProperties(export), nil
 	default:
 		return nil, fmt.Errorf("unsupported CalDAV target")
 	}
@@ -523,56 +588,100 @@ func parsePropfind(reader io.Reader) (bool, []xml.Name, error) {
 	return false, requested, nil
 }
 
-func parseCalendarQuery(reader io.Reader) (calendarQuery, error) {
+func parseReport(reader io.Reader) (reportRequest, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return calendarQuery{}, err
+		return reportRequest{}, err
 	}
 	if len(bytes.TrimSpace(content)) == 0 {
-		return calendarQuery{}, nil
+		return reportRequest{kind: reportCalendarQuery}, nil
 	}
 
-	query := calendarQuery{}
+	report := reportRequest{kind: reportCalendarQuery}
 	decoder := xml.NewDecoder(bytes.NewReader(content))
 	componentStack := []string{}
+	propDepth := -1
+	inHref := false
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return calendarQuery{}, err
+			return reportRequest{}, err
 		}
 
 		switch value := token.(type) {
 		case xml.StartElement:
+			switch value.Name.Local {
+			case "calendar-query":
+				report.kind = reportCalendarQuery
+			case "calendar-multiget":
+				report.kind = reportCalendarMultiget
+			case "prop":
+				propDepth = 0
+			case "href":
+				if report.kind == reportCalendarMultiget && propDepth < 0 {
+					inHref = true
+				}
+			default:
+				if report.kind == reportCalendarMultiget && propDepth == 0 {
+					report.requested = append(report.requested, value.Name)
+				}
+			}
+			if propDepth >= 0 && value.Name.Local != "prop" {
+				propDepth++
+			}
+
 			if value.Name.Local == "comp-filter" {
 				componentName := strings.ToUpper(attr(value, "name"))
 				componentStack = append(componentStack, componentName)
 				switch componentName {
 				case "VEVENT":
-					query.includeEvents = true
+					report.query.includeEvents = true
 				case "VTODO":
-					query.includeTasks = true
+					report.query.includeTasks = true
 				}
 				continue
 			}
 			if value.Name.Local == "time-range" && slices.Contains(componentStack, "VEVENT") {
 				from, to, err := parseTimeRange(value)
 				if err != nil {
-					return calendarQuery{}, err
+					return reportRequest{}, err
 				}
-				query.hasTimeRange = true
-				query.from = from
-				query.to = to
+				report.query.hasTimeRange = true
+				report.query.from = from
+				report.query.to = to
+			}
+		case xml.CharData:
+			if inHref {
+				if href := strings.TrimSpace(string(value)); href != "" {
+					report.hrefs = append(report.hrefs, href)
+				}
 			}
 		case xml.EndElement:
 			if value.Name.Local == "comp-filter" && len(componentStack) > 0 {
 				componentStack = componentStack[:len(componentStack)-1]
 			}
+			if value.Name.Local == "prop" {
+				propDepth = -1
+			} else if propDepth > 0 {
+				propDepth--
+			}
+			if value.Name.Local == "href" {
+				inHref = false
+			}
 		}
 	}
-	return query, nil
+	return report, nil
+}
+
+func calendarObjectProperties(export domain.ICalendarExport) []propertyValue {
+	return []propertyValue{
+		{name: davName("getcontenttype"), text: export.ContentType},
+		{name: davName("getcontentlength"), text: fmt.Sprintf("%d", len(export.Content))},
+		{name: davName("getetag"), text: etag(export.Content)},
+	}
 }
 
 func parseTimeRange(element xml.StartElement) (time.Time, time.Time, error) {
@@ -752,6 +861,18 @@ func route(rawPath string) (target, bool) {
 		}, true
 	}
 	return target{}, false
+}
+
+func targetForHref(rawHref string) (target, bool) {
+	href := strings.TrimSpace(rawHref)
+	if href == "" {
+		return target{}, false
+	}
+	parsed, err := url.Parse(href)
+	if err == nil && parsed.Path != "" {
+		href = parsed.Path
+	}
+	return route(href)
 }
 
 func (server *Server) listCalendars() ([]domain.Calendar, error) {

@@ -3,7 +3,9 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -55,6 +57,20 @@ func (object ICalendarObject) Title() string {
 }
 
 func (object ICalendarObject) ResourceName() string {
+	switch object.Kind {
+	case ICalendarObjectKindEvent:
+		if object.Event != nil && object.Event.ICalendarUID != nil {
+			if uid := strings.TrimSpace(*object.Event.ICalendarUID); uid != "" {
+				return uidResourceName(uid)
+			}
+		}
+	case ICalendarObjectKindTask:
+		if object.Task != nil && object.Task.ICalendarUID != nil {
+			if uid := strings.TrimSpace(*object.Task.ICalendarUID); uid != "" {
+				return uidResourceName(uid)
+			}
+		}
+	}
 	return object.ID() + ".ics"
 }
 
@@ -117,12 +133,14 @@ func (service *Service) ResolveICalendarObject(calendarID string, resource strin
 		}
 	}
 
-	object, found, err := service.resolveICalendarObjectByUID(calendar, token)
-	if err != nil {
-		return ICalendarObject{}, err
-	}
-	if found {
-		return object, nil
+	for _, candidate := range uidCandidates(token) {
+		object, found, err := service.resolveICalendarObjectByUID(calendar, candidate)
+		if err != nil {
+			return ICalendarObject{}, err
+		}
+		if found {
+			return object, nil
+		}
 	}
 
 	return ICalendarObject{}, &NotFoundError{
@@ -190,6 +208,7 @@ func (service *Service) exportICalendarObjects(calendar domain.Calendar, objects
 		return domain.ICalendarExport{}, err
 	}
 
+	generatedAt := stableICalendarGeneratedAt(objects, eventStates, taskStates, taskCompletions, service.now())
 	result := icalendar.Build(icalendar.Export{
 		Calendars:             []domain.Calendar{calendar},
 		Events:                events,
@@ -197,7 +216,7 @@ func (service *Service) exportICalendarObjects(calendar domain.Calendar, objects
 		EventOccurrenceStates: eventStates,
 		TaskOccurrenceStates:  taskStates,
 		TaskCompletions:       taskCompletions,
-		GeneratedAt:           service.now(),
+		GeneratedAt:           generatedAt,
 		Name:                  calendarExportName(calendar.Name),
 	})
 
@@ -214,6 +233,41 @@ func (service *Service) exportICalendarObjects(calendar domain.Calendar, objects
 		TaskCount:    result.TaskCount,
 		Content:      result.Content,
 	}, nil
+}
+
+func stableICalendarGeneratedAt(objects []ICalendarObject, eventStates map[string]map[string]domain.OccurrenceState, taskStates map[string]map[string]domain.OccurrenceState, taskCompletions map[string]map[string]domain.TaskCompletion, fallback time.Time) time.Time {
+	generatedAt := time.Time{}
+	for _, object := range objects {
+		switch object.Kind {
+		case ICalendarObjectKindEvent:
+			if object.Event != nil && object.Event.UpdatedAt.After(generatedAt) {
+				generatedAt = object.Event.UpdatedAt
+			}
+			for _, state := range eventStates[object.ID()] {
+				if state.UpdatedAt.After(generatedAt) {
+					generatedAt = state.UpdatedAt
+				}
+			}
+		case ICalendarObjectKindTask:
+			if object.Task != nil && object.Task.UpdatedAt.After(generatedAt) {
+				generatedAt = object.Task.UpdatedAt
+			}
+			for _, state := range taskStates[object.ID()] {
+				if state.UpdatedAt.After(generatedAt) {
+					generatedAt = state.UpdatedAt
+				}
+			}
+			for _, completion := range taskCompletions[object.ID()] {
+				if completion.CompletedAt.After(generatedAt) {
+					generatedAt = completion.CompletedAt
+				}
+			}
+		}
+	}
+	if generatedAt.IsZero() {
+		return fallback
+	}
+	return generatedAt.UTC()
 }
 
 func (service *Service) resolveICalendarObjectByID(calendar domain.Calendar, id string) (ICalendarObject, bool, error) {
@@ -278,6 +332,18 @@ func localObjectIDCandidates(resource string) []string {
 	const localUIDSuffix = "@openplanner.local"
 	if strings.HasSuffix(resource, localUIDSuffix) {
 		candidates = append(candidates, strings.TrimSuffix(resource, localUIDSuffix))
+	}
+	return candidates
+}
+
+func uidResourceName(uid string) string {
+	return url.PathEscape(uid) + ".ics"
+}
+
+func uidCandidates(resource string) []string {
+	candidates := []string{resource}
+	if unescaped, err := url.PathUnescape(resource); err == nil && unescaped != resource {
+		candidates = append(candidates, unescaped)
 	}
 	return candidates
 }

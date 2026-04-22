@@ -27,7 +27,7 @@ OpenPlanner data path is used.
 Supported methods are minimal:
 
 - `PROPFIND` with `Depth: 0` and `Depth: 1`.
-- `REPORT` for CalDAV `calendar-query`.
+- `REPORT` for CalDAV `calendar-query` and `calendar-multiget`.
 - `GET` and `HEAD` for calendar object resources.
 - `PUT` for one base `VEVENT` or `VTODO` per request.
 - `DELETE` for existing calendar object resources.
@@ -37,14 +37,15 @@ Supported methods are minimal:
 Local scripted smoke coverage uses `curl` against the local adapter. Practical
 client compatibility results are recorded in
 [`docs/caldav-client-compatibility.md`](caldav-client-compatibility.md).
-`op-2vv.15` found the prototype compatible with the baseline curl surface and
-partially compatible with vdirsyncer-backed khal/todoman workflows, but not
-viable as the v1 migration path until sync-client semantics and GUI client
-setup are hardened.
+`op-2vv.15` found the prototype compatible with the baseline curl surface.
+Follow-up `op-jty` added the `calendar-multiget` and stable object ETag behavior
+needed by vdirsyncer-backed khal/todoman sync workflows. CalDAV remains
+experimental and is not the v1 migration path until broader GUI client setup is
+validated.
 
 | Client | Scope | Result |
 | --- | --- | --- |
-| Go 1.26.2 | `httptest` coverage for discovery, `PROPFIND`, `REPORT`, `GET`, `PUT`, and `DELETE` | Passed with `go test ./...` |
+| Go 1.26.2 | `httptest` coverage for discovery, `PROPFIND`, `calendar-query`, `calendar-multiget`, stable ETags, `GET`, `PUT`, and `DELETE` | Passed with `go test ./...` |
 | curl 8.7.1 | Manual local HTTP smoke using the commands below | Passed: `PROPFIND` root `207`, `PROPFIND` home `207`, `PUT` `201`, `GET` `200`, `REPORT` `207`, `DELETE` `204`, deleted object `GET` `404` |
 
 Example smoke sequence:
@@ -90,6 +91,8 @@ curl -i -X DELETE http://127.0.0.1:8080/caldav/calendars/local/<calendar-id>/cli
 - `PROPFIND` property support is intentionally narrow; unsupported requested
   properties are returned in a per-property `404` propstat.
 - `REPORT calendar-query` supports broad object listing and `VEVENT`
-  time-range filtering. More advanced CalDAV filters are not implemented.
+  time-range filtering. `REPORT calendar-multiget` supports explicit object
+  href fetches for sync clients. More advanced CalDAV reports and filters are
+  not implemented.
 - Large calendars are not optimized for sync clients; this prototype favors
   correctness and smokeability over sync performance.
