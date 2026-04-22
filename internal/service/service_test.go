@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1338,6 +1339,182 @@ func TestImportICalendarReimportRemovesStaleOccurrenceState(t *testing.T) {
 	}
 }
 
+func TestImportICalendarProviderMigrationFixtures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		calendarName string
+		color        string
+		events       int
+		tasks        int
+		check        func(*testing.T, *service.Service, domain.Calendar)
+	}{
+		{
+			name:         "google.ics",
+			calendarName: "Google Work",
+			color:        "#2952A3",
+			events:       1,
+			check: func(t *testing.T, svc *service.Service, calendar domain.Calendar) {
+				t.Helper()
+				events, err := svc.ListEvents(domain.PageParams{CalendarID: calendar.ID})
+				if err != nil {
+					t.Fatalf("ListEvents(google): %v", err)
+				}
+				if len(events.Items) != 1 {
+					t.Fatalf("google events = %#v, want one event", events.Items)
+				}
+				event := events.Items[0]
+				if event.Title != "Google weekly sync" ||
+					event.StartAt == nil ||
+					event.StartAt.Format(time.RFC3339) != "2026-04-20T09:00:00-05:00" ||
+					event.EndAt == nil ||
+					event.EndAt.Format(time.RFC3339) != "2026-04-20T09:30:00-05:00" ||
+					event.TimeZone == nil ||
+					*event.TimeZone != "America/Chicago" ||
+					event.Recurrence == nil ||
+					event.Recurrence.Frequency != domain.RecurrenceFrequencyWeekly ||
+					event.Recurrence.Count == nil ||
+					*event.Recurrence.Count != 3 ||
+					!slices.Equal(event.Recurrence.ByWeekday, []domain.Weekday{domain.WeekdayMonday}) ||
+					len(event.Reminders) != 1 ||
+					event.Reminders[0].BeforeMinutes != 10 ||
+					len(event.Attendees) != 2 {
+					t.Fatalf("google event = %#v", event)
+				}
+				agenda := providerFixtureAgenda(t, svc, time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC), time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC))
+				if len(agenda.Items) != 2 ||
+					agenda.Items[0].StartAt == nil ||
+					agenda.Items[0].StartAt.Format(time.RFC3339) != "2026-04-20T09:00:00-05:00" ||
+					agenda.Items[1].StartAt == nil ||
+					agenda.Items[1].StartAt.Format(time.RFC3339) != "2026-05-04T11:00:00-05:00" {
+					t.Fatalf("google agenda = %#v, want original and moved occurrence only", agenda.Items)
+				}
+			},
+		},
+		{
+			name:         "apple.ics",
+			calendarName: "Apple Personal",
+			color:        "#63DA38",
+			events:       2,
+			check: func(t *testing.T, svc *service.Service, calendar domain.Calendar) {
+				t.Helper()
+				events, err := svc.ListEvents(domain.PageParams{CalendarID: calendar.ID})
+				if err != nil {
+					t.Fatalf("ListEvents(apple): %v", err)
+				}
+				if len(events.Items) != 2 {
+					t.Fatalf("apple events = %#v, want two events", events.Items)
+				}
+				retreat := eventByTitle(t, events.Items, "Apple retreat")
+				if retreat.StartDate == nil ||
+					*retreat.StartDate != "2026-04-21" ||
+					retreat.EndDate == nil ||
+					*retreat.EndDate != "2026-04-22" ||
+					retreat.Location == nil ||
+					*retreat.Location != "Lodge" {
+					t.Fatalf("apple retreat = %#v", retreat)
+				}
+				focus := eventByTitle(t, events.Items, "Apple focus day")
+				if focus.StartDate == nil ||
+					*focus.StartDate != "2026-05-01" ||
+					focus.Recurrence == nil ||
+					focus.Recurrence.Frequency != domain.RecurrenceFrequencyDaily ||
+					focus.Recurrence.Count == nil ||
+					*focus.Recurrence.Count != 3 {
+					t.Fatalf("apple focus = %#v", focus)
+				}
+				agenda := providerFixtureAgenda(t, svc, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC))
+				if len(agenda.Items) != 2 ||
+					agenda.Items[0].StartDate == nil ||
+					*agenda.Items[0].StartDate != "2026-05-01" ||
+					agenda.Items[1].StartDate == nil ||
+					*agenda.Items[1].StartDate != "2026-05-04" {
+					t.Fatalf("apple agenda = %#v, want original and moved all-day occurrence only", agenda.Items)
+				}
+			},
+		},
+		{
+			name:         "microsoft.ics",
+			calendarName: "Microsoft Migration",
+			color:        "#D13438",
+			events:       1,
+			tasks:        1,
+			check: func(t *testing.T, svc *service.Service, calendar domain.Calendar) {
+				t.Helper()
+				events, err := svc.ListEvents(domain.PageParams{CalendarID: calendar.ID})
+				if err != nil {
+					t.Fatalf("ListEvents(microsoft): %v", err)
+				}
+				if len(events.Items) != 1 {
+					t.Fatalf("microsoft events = %#v, want one event", events.Items)
+				}
+				event := events.Items[0]
+				if event.Title != "Outlook project review" ||
+					event.StartAt == nil ||
+					event.StartAt.Format(time.RFC3339) != "2026-04-22T15:00:00Z" ||
+					event.EndAt == nil ||
+					event.EndAt.Format(time.RFC3339) != "2026-04-22T16:00:00Z" ||
+					len(event.Reminders) != 1 ||
+					event.Reminders[0].BeforeMinutes != 15 {
+					t.Fatalf("microsoft event = %#v", event)
+				}
+				tasks, err := svc.ListTasks(domain.TaskListParams{PageParams: domain.PageParams{CalendarID: calendar.ID}})
+				if err != nil {
+					t.Fatalf("ListTasks(microsoft): %v", err)
+				}
+				if len(tasks.Items) != 1 {
+					t.Fatalf("microsoft tasks = %#v, want one task", tasks.Items)
+				}
+				task := tasks.Items[0]
+				if task.Title != "Review Outlook notes" ||
+					task.DueAt == nil ||
+					task.DueAt.Format(time.RFC3339) != "2026-04-23T15:00:00Z" ||
+					task.Priority != domain.TaskPriorityHigh ||
+					task.Status != domain.TaskStatusInProgress ||
+					!slices.Equal(task.Tags, []string{"planning", "review"}) ||
+					len(task.Reminders) != 1 ||
+					task.Reminders[0].BeforeMinutes != 60 {
+					t.Fatalf("microsoft task = %#v", task)
+				}
+				agenda := providerFixtureAgenda(t, svc, time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
+				if len(agenda.Items) != 2 {
+					t.Fatalf("microsoft agenda = %#v, want imported event and task", agenda.Items)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			content := readProviderFixture(t, test.name)
+			first, err := svc.ImportICalendar(domain.ICalendarImportRequest{Content: content})
+			if err != nil {
+				t.Fatalf("ImportICalendar(first): %v", err)
+			}
+			if first.CalendarCount != 1 || first.EventCount != test.events || first.TaskCount != test.tasks || len(first.Skips) != 0 {
+				t.Fatalf("first import = %#v", first)
+			}
+			calendar := providerFixtureCalendar(t, svc, test.calendarName)
+			if calendar.Color == nil || *calendar.Color != test.color {
+				t.Fatalf("calendar color = %#v, want %s", calendar.Color, test.color)
+			}
+			test.check(t, svc, calendar)
+
+			second, err := svc.ImportICalendar(domain.ICalendarImportRequest{Content: content})
+			if err != nil {
+				t.Fatalf("ImportICalendar(second): %v", err)
+			}
+			if second.EventCount != test.events || second.TaskCount != test.tasks || second.UpdatedCount == 0 || len(second.Skips) != 0 {
+				t.Fatalf("second import = %#v, want UID-based updates without skips", second)
+			}
+			test.check(t, svc, calendar)
+		})
+	}
+}
+
 func TestReminderPendingQueriesAndDismissal(t *testing.T) {
 	t.Parallel()
 
@@ -1570,6 +1747,50 @@ func TestReminderValidationRejectsInvalidInputs(t *testing.T) {
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("DismissReminderOccurrence(invalid id) error = %T, want ValidationError", err)
 	}
+}
+
+func readProviderFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "icalendar", "testdata", "import", name))
+	if err != nil {
+		t.Fatalf("read provider fixture %s: %v", name, err)
+	}
+	return string(data)
+}
+
+func providerFixtureCalendar(t *testing.T, svc *service.Service, name string) domain.Calendar {
+	t.Helper()
+	calendars, err := svc.ListCalendars(domain.PageParams{})
+	if err != nil {
+		t.Fatalf("ListCalendars(): %v", err)
+	}
+	for _, calendar := range calendars.Items {
+		if calendar.Name == name {
+			return calendar
+		}
+	}
+	t.Fatalf("calendar %q not found in %#v", name, calendars.Items)
+	return domain.Calendar{}
+}
+
+func providerFixtureAgenda(t *testing.T, svc *service.Service, from time.Time, to time.Time) domain.Page[domain.AgendaItem] {
+	t.Helper()
+	agenda, err := svc.ListAgenda(domain.AgendaParams{From: from, To: to})
+	if err != nil {
+		t.Fatalf("ListAgenda(): %v", err)
+	}
+	return agenda
+}
+
+func eventByTitle(t *testing.T, events []domain.Event, title string) domain.Event {
+	t.Helper()
+	for _, event := range events {
+		if event.Title == title {
+			return event
+		}
+	}
+	t.Fatalf("event %q not found in %#v", title, events)
+	return domain.Event{}
 }
 
 func int32Ptr(value int32) *int32 {

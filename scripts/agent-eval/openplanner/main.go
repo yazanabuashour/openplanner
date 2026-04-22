@@ -57,6 +57,11 @@ const (
 	scenarioCategoryFutureSurface         = "future_surface"
 	scenarioFeatureSupported              = "supported"
 	scenarioFeatureUnsupportedUntilLanded = "unsupported_until_landed"
+	evalImportICalendarUID                = "eval-import@example.com"
+	evalImportICalendarCalendarName       = "Imported Work"
+	evalImportICalendarEventTitle         = "Imported planning review"
+	evalImportICalendarEventStartAt       = "2026-04-18T15:00:00Z"
+	evalImportICalendarContent            = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-CALNAME:Imported Work\r\nBEGIN:VEVENT\r\nUID:eval-import@example.com\r\nSUMMARY:Imported planning review\r\nDTSTART:20260418T150000Z\r\nDTEND:20260418T153000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 )
 
 var prewarmCompilePackages = []string{"./cmd/openplanner", "./internal/runner"}
@@ -67,7 +72,6 @@ var requiredFullSuiteCategories = []string{
 	scenarioCategoryAdvancedRecurrence,
 	scenarioCategoryMigration,
 	scenarioCategoryMultiTurn,
-	scenarioCategoryFutureSurface,
 }
 
 type scenario struct {
@@ -1635,7 +1639,7 @@ func scenarios() []scenario {
 		{ID: "monthly-recurrence-by-month-day", Title: "Create monthly recurrence by month day", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal task titled Pay rent due on 2026-01-31 recurring monthly on the 31st for 3 occurrences. Then tell me the recurrence stored."},
 		{ID: "task-metadata-create", Title: "Create task priority, status, and tags", Category: scenarioCategoryUpdate, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal OpenPlanner task titled Review notes due on 2026-04-16 with high priority, status in_progress, and tags planning and review. Then tell me the stored priority, status, and tags."},
 		{ID: "migration-style-copy", Title: "Copy selected source calendar data into a destination calendar", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Copy the Legacy calendar items titled Team sync and Review notes into the Work calendar, leaving the Legacy items in place. Then tell me what was copied."},
-		{ID: "unsupported-import", Title: "Reject iCalendar import before runner support lands", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded, Prompt: "Please import an iCalendar .ics file into OpenPlanner. If the production OpenPlanner skill does not support import yet, say that directly without switching interfaces."},
+		{ID: "import-icalendar", Title: "Import an iCalendar event through the runner", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Import this complete iCalendar content into OpenPlanner:\n" + evalImportICalendarContent + "Then tell me what was imported."},
 		{ID: "reminder-create-query-dismiss", Title: "Create, query, and dismiss a reminder", Category: scenarioCategoryRoutine, FeatureState: scenarioFeatureSupported, Prompt: "Use the configured local OpenPlanner data path. Add a Personal OpenPlanner task titled Take medicine due at 2026-04-16T10:00:00Z with a reminder one hour before. Then list pending reminders from 2026-04-16T08:00:00Z to 2026-04-16T10:00:00Z, dismiss the reminder you created, and tell me that no pending reminder remains in that range."},
 		{ID: "mt-clarify-then-create", Title: "Clarify missing year, then create in a resumed turn", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported, Turns: []scenarioTurn{
 			{Prompt: "Please add a local OpenPlanner Personal task titled Review notes due 04/16. There is no year context in this conversation or my request."},
@@ -1912,8 +1916,8 @@ func verifyScenarioTurn(dbPath string, sc scenario, turnIndex int, finalMessage 
 		return verifyReminderCreateQueryDismiss(dbPath, finalMessage)
 	case "migration-style-copy":
 		return verifyMigrationCopy(dbPath, finalMessage)
-	case "unsupported-import":
-		return verifyUnsupportedWorkflow(dbPath, finalMessage, []string{"unsupported", "not support", "does not support"}, []string{"import", "icalendar", "ics"})
+	case "import-icalendar":
+		return verifyICalendarImport(dbPath, finalMessage)
 	case "ambiguous-short-date":
 		return verifyFinalAnswerOnlyRejection(dbPath, finalMessage, []string{"year"})
 	case "year-first-slash-date":
@@ -2050,6 +2054,57 @@ func verifyEvents(dbPath string, finalMessage string, expected []eventState, for
 		Details:       passDetails(databasePass, assistantPass, "expected events in DB and final answer"),
 		Events:        expected,
 	}, nil
+}
+
+func verifyICalendarImport(dbPath string, finalMessage string) (verificationResult, error) {
+	expectedCalendar := calendarState{Name: evalImportICalendarCalendarName}
+	expectedEvent := eventState{Title: evalImportICalendarEventTitle, StartAt: evalImportICalendarEventStartAt}
+	calendars, err := listCalendars(dbPath)
+	if err != nil {
+		return verificationResult{}, err
+	}
+	calendarID := ""
+	for _, calendar := range calendars {
+		if calendar.Name == evalImportICalendarCalendarName {
+			calendarID = calendar.ID
+			break
+		}
+	}
+
+	databasePass := calendarID != ""
+	if databasePass {
+		events, err := listDomainEvents(dbPath, calendarID)
+		if err != nil {
+			return verificationResult{}, err
+		}
+		databasePass = importedEventExists(events, evalImportICalendarUID, expectedEvent)
+	}
+	assistantPass := finalMentionsExpected(finalMessage, eventMentionValues([]eventState{expectedEvent}), nil)
+	return verificationResult{
+		Passed:        databasePass && assistantPass,
+		DatabasePass:  databasePass,
+		AssistantPass: assistantPass,
+		Details:       passDetails(databasePass, assistantPass, "expected imported calendar and UID-backed event in DB and final answer"),
+		Calendars:     []calendarState{expectedCalendar},
+		Events:        []eventState{expectedEvent},
+	}, nil
+}
+
+func listDomainEvents(dbPath string, calendarID string) ([]domain.Event, error) {
+	if !fileExists(dbPath) {
+		return nil, nil
+	}
+	repository, err := store.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = repository.Close() }()
+	service := internalservice.New(repository)
+	page, err := service.ListEvents(domain.PageParams{CalendarID: calendarID, Limit: 100})
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
 }
 
 func listEventsForCalendar(dbPath string, calendarName string) ([]runner.EventEntry, error) {
@@ -2443,6 +2498,25 @@ func eventExists(events []runner.EventEntry, want eventState) bool {
 			continue
 		}
 		if !recurrenceMatches(event.Recurrence, want.Recurrence, want.Interval, want.Count, want.UntilAt, want.UntilDate, want.ByWeekday, want.ByMonthDay) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func importedEventExists(events []domain.Event, uid string, want eventState) bool {
+	for _, event := range events {
+		if event.ICalendarUID == nil || *event.ICalendarUID != uid {
+			continue
+		}
+		if event.Title != want.Title {
+			continue
+		}
+		if want.StartAt != "" && (event.StartAt == nil || event.StartAt.Format(time.RFC3339) != want.StartAt) {
+			continue
+		}
+		if want.StartDate != "" && (event.StartDate == nil || *event.StartDate != want.StartDate) {
 			continue
 		}
 		return true

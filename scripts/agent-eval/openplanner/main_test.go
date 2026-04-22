@@ -393,7 +393,6 @@ func TestScenarioCoverageFullAndFiltered(t *testing.T) {
 		{ID: "recurrence", Category: scenarioCategoryAdvancedRecurrence, FeatureState: scenarioFeatureSupported},
 		{ID: "migration", Category: scenarioCategoryMigration, FeatureState: scenarioFeatureSupported},
 		{ID: "multi", Category: scenarioCategoryMultiTurn, FeatureState: scenarioFeatureSupported},
-		{ID: "future", Category: scenarioCategoryFutureSurface, FeatureState: scenarioFeatureUnsupportedUntilLanded},
 	}, false)
 	for _, coverage := range full {
 		if coverage.Required && !coverage.Passed {
@@ -439,6 +438,46 @@ func TestUnsupportedWorkflowScoring(t *testing.T) {
 	score = productionScoreFor([]runResult{result}, selected, true)
 	if !score.Passed {
 		t.Fatalf("unsupported workflow score should not fail solely because the agent inspected the production skill: %#v", score)
+	}
+}
+
+func TestVerifyICalendarImportRequiresImportedUID(t *testing.T) {
+	t.Parallel()
+
+	finalMessage := "Imported planning review on 2026-04-18."
+	manualDBPath := filepath.Join(t.TempDir(), "manual.db")
+	manual, err := runPlanning(manualDBPath, runner.PlanningTaskRequest{
+		Action:       runner.PlanningTaskActionCreateEvent,
+		CalendarName: evalImportICalendarCalendarName,
+		Title:        evalImportICalendarEventTitle,
+		StartAt:      evalImportICalendarEventStartAt,
+		EndAt:        "2026-04-18T15:30:00Z",
+	})
+	if err != nil || manual.Rejected {
+		t.Fatalf("create lookalike event result = %#v, err = %v", manual, err)
+	}
+	manualCheck, err := verifyICalendarImport(manualDBPath, finalMessage)
+	if err != nil {
+		t.Fatalf("verify manual lookalike import: %v", err)
+	}
+	if manualCheck.DatabasePass || manualCheck.Passed {
+		t.Fatalf("manual lookalike event should not pass import verification: %#v", manualCheck)
+	}
+
+	importDBPath := filepath.Join(t.TempDir(), "import.db")
+	imported, err := runPlanning(importDBPath, runner.PlanningTaskRequest{
+		Action:  runner.PlanningTaskActionImportICalendar,
+		Content: evalImportICalendarContent,
+	})
+	if err != nil || imported.Rejected {
+		t.Fatalf("import result = %#v, err = %v", imported, err)
+	}
+	importCheck, err := verifyICalendarImport(importDBPath, finalMessage)
+	if err != nil {
+		t.Fatalf("verify imported event: %v", err)
+	}
+	if !importCheck.Passed {
+		t.Fatalf("imported event verification failed: %#v", importCheck)
 	}
 }
 

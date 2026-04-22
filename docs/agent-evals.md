@@ -41,12 +41,12 @@ The expanded production gate adds:
   `by_month_day` schedules
 - migration-style workflows that recreate selected source calendar data through
   runner actions
+- iCalendar import through the production runner using complete `.ics` content
 - multi-turn disambiguation that requires a clarification before writing
-- future-surface unsupported gates for import until that JSON runner feature
-  lands
 
-Unsupported gates become positive gates when their corresponding runner actions
-or fields are implemented. The production skill remains the only model-visible
+The provider-shaped migration fixture suite lives under
+`internal/icalendar/testdata/import/` and is covered by deterministic Go tests
+rather than LLM eval prompts. The production skill remains the only model-visible
 task policy; the harness does not generate an OpenPlanner-specific eval
 `AGENTS.md` or paste skill content into `AGENTS.md`.
 
@@ -132,8 +132,6 @@ Production passes only when:
   runs record category coverage as filtered instead of failing
 - rule-covered invalid-input scenarios are final-answer-only: no tools, no
   command executions, and at most one assistant answer
-- unsupported future-surface scenarios answer without DB writes or fallback
-  interfaces
 - production has no stale removed-interface inspection, module-cache inspection,
   direct SQLite access, source-checkout runner usage, or routine broad repo
   search
