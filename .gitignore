@@ -8,3 +8,6 @@
 /bin/
 coverage.out
 .openapi-generator-tmp/
+
+# macOS metadata
+.DS_Store
