@@ -6,12 +6,104 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
 	"github.com/yazanabuashour/openplanner/internal/caldav"
 	"github.com/yazanabuashour/openplanner/internal/runner"
 )
+
+func TestRunVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--version"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); !strings.HasPrefix(got, "openplanner ") {
+		t.Fatalf("--version output = %q, want openplanner prefix", got)
+	}
+
+	stdout.Reset()
+	exitCode = run([]string{"version"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); !strings.HasPrefix(got, "openplanner ") {
+		t.Fatalf("version output = %q, want openplanner prefix", got)
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--help"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
+	}
+	for _, want := range []string{
+		"openplanner --version",
+		"openplanner planning",
+		"openplanner caldav",
+		"CalDAV adapter is experimental",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("help output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestResolvedVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		linkerVersion string
+		info          *debug.BuildInfo
+		ok            bool
+		want          string
+	}{
+		{
+			name:          "linker version wins",
+			linkerVersion: "v0.1.0",
+			info:          &debug.BuildInfo{Main: debug.Module{Version: "v0.0.9"}},
+			ok:            true,
+			want:          "v0.1.0",
+		},
+		{
+			name: "module version",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}},
+			ok:   true,
+			want: "v0.1.0",
+		},
+		{
+			name: "development fallback",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}},
+			ok:   true,
+			want: "dev",
+		},
+		{
+			name: "missing build info fallback",
+			want: "dev",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := resolvedVersion(tt.linkerVersion, tt.info, tt.ok); got != tt.want {
+				t.Fatalf("resolvedVersion = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestPlanningRunnerJSONRoundTripAndDBFlag(t *testing.T) {
 	t.Parallel()

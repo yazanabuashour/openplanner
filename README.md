@@ -10,9 +10,10 @@ Tell your agent:
 
 ```text
 Install OpenPlanner from https://github.com/yazanabuashour/openplanner.
-Complete both required steps before reporting success:
-1. Install and verify the openplanner runner binary.
-2. Register the OpenPlanner skill from skills/openplanner/SKILL.md using your native skill system.
+Complete all required steps before reporting success:
+1. Install and verify the openplanner runner binary with `openplanner --version`.
+2. Verify the planning runner with `printf '%s\n' '{"action":"validate"}' | openplanner planning`.
+3. Register the OpenPlanner skill from skills/openplanner/SKILL.md using your native skill system.
 ```
 
 The agent should install the `openplanner` runner and place the
@@ -20,6 +21,26 @@ The agent should install the `openplanner` runner and place the
 does not require one canonical skill path: Codex, Claude Code, OpenClaw, Hermes,
 and other Agent Skills-compatible agents each manage skill locations in their
 own way.
+
+A complete local agent-use install has three parts:
+
+- `openplanner --version` succeeds.
+- `printf '%s\n' '{"action":"validate"}' | openplanner planning` returns unrejected JSON.
+- The matching skill is registered from `skills/openplanner/SKILL.md`, `https://github.com/yazanabuashour/openplanner/tree/<tag>/skills/openplanner`, or `openplanner_<version>_skill.tar.gz`.
+
+## Upgrade
+
+Tell your agent:
+
+```text
+Upgrade OpenPlanner from https://github.com/yazanabuashour/openplanner.
+Complete all required steps before reporting success:
+1. Upgrade and verify the openplanner runner binary with `openplanner --version`.
+2. Verify the planning runner with `printf '%s\n' '{"action":"validate"}' | openplanner planning`.
+3. Re-register the OpenPlanner skill from skills/openplanner/SKILL.md using your native skill system.
+```
+
+The runner and skill should come from the same tag or checkout.
 
 ## Manual Install
 
@@ -46,6 +67,25 @@ curl -fsSL https://github.com/yazanabuashour/openplanner/releases/latest/downloa
 
 Optional per-agent examples are in [docs/agent-install.md](docs/agent-install.md).
 Those examples are not the OpenPlanner install contract.
+
+## Local Agent-Use Checklist
+
+Use OpenPlanner locally by installing the runner on `PATH`, registering the
+matching skill with your agent, and letting the runner use its default SQLite
+path at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. For an
+isolated or test planner, set `OPENPLANNER_DATABASE_PATH=<database-path>` before
+agent runs or pass `openplanner planning --db <database-path>` during manual
+checks.
+
+The experimental CalDAV adapter is not part of the supported local agent-use
+deployment path. Keep CalDAV disabled unless you are explicitly testing local
+client compatibility on loopback.
+
+## Eval Evidence
+
+The local agent-use runner/skill gate passed the current 39-scenario production
+suite with recommendation `ship_openplanner_runner_local_agent_use`:
+[`docs/agent-eval-results/op-runner-2026-04-22-local-agent-use-final.md`](docs/agent-eval-results/op-runner-2026-04-22-local-agent-use-final.md).
 
 ## Product Surface
 
@@ -218,14 +258,15 @@ mise install
 Exercise the JSON runner with:
 
 ```bash
-go build -o ./bin/openplanner ./cmd/openplanner
+mise exec -- go build -o ./bin/openplanner ./cmd/openplanner
+./bin/openplanner --version
 printf '%s\n' '{"action":"validate"}' | ./bin/openplanner planning
 ```
 
 Run the local quality gates with:
 
 ```bash
-make check
+mise exec -- make check
 ```
 
 `make check` runs formatting validation, Agent Skills validation, the Go test
@@ -251,6 +292,7 @@ or install from `main`.
 - [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
 - [docs/local-data-backup.md](docs/local-data-backup.md) explains backup, restore, and recovery checks for local OpenPlanner data.
 - [docs/local-data-security.md](docs/local-data-security.md) documents the local data threat model, CalDAV exposure limits, and parser/server hardening follow-ups.
+- [docs/security-operations.md](docs/security-operations.md) defines recurring security review, advisory rehearsal, and high-risk surface review expectations.
 - [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows.
 - [internal/runner](internal/runner) contains the JSON-friendly task facade for production agent workflows.
 - [cmd/openplanner](cmd/openplanner) contains the installed JSON runner.

@@ -3143,7 +3143,10 @@ func productionScoreFor(results []runResult, selectedScenarios []scenario, filte
 			allPassed = false
 		}
 	}
-	recommendation := "prefer_runner_for_routine_openplanner_operations"
+	recommendation := "ship_openplanner_runner_local_agent_use"
+	if filteredRun {
+		recommendation = "prefer_runner_for_routine_openplanner_operations"
+	}
 	if !allPassed {
 		recommendation = "review_runner_eval_failures_before_recommending"
 	}

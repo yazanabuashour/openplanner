@@ -15,9 +15,11 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  verify-release:
     name: Verify release inputs
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -36,24 +38,30 @@ jobs:
           install: true
           cache: true
 
+      - name: Validate release notes and changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: ./scripts/validate-release-docs.sh "${GITHUB_REF_NAME}"
+
       - name: Run repository checks
         run: make check
 
   package-release:
-    name: Package and attest release
-    needs: verify
+    name: Package release assets
     runs-on: ubuntu-latest
+    needs:
+      - verify-release
     permissions:
+      attestations: write
       contents: read
       id-token: write
-      attestations: write
-      artifact-metadata: write
     outputs:
+      assets_json: ${{ steps.meta.outputs.assets_json }}
+      archive: ${{ steps.meta.outputs.archive }}
+      checksum: ${{ steps.meta.outputs.checksum }}
+      installer: ${{ steps.meta.outputs.installer }}
+      sbom: ${{ steps.meta.outputs.sbom }}
+      skill: ${{ steps.meta.outputs.skill }}
       version: ${{ steps.meta.outputs.version }}
-      archive_name: ${{ steps.meta.outputs.archive_name }}
-      skill_name: ${{ steps.meta.outputs.skill_name }}
-      sbom_name: ${{ steps.meta.outputs.sbom_name }}
-      checksums_name: ${{ steps.meta.outputs.checksums_name }}
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -67,11 +75,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Derive release metadata
+      - name: Prepare release metadata
         id: meta
         env:
           INPUT_REF: ${{ inputs.ref }}
         run: |
+          mkdir -p dist
           revision="$(git rev-parse HEAD)"
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -82,22 +91,49 @@ jobs:
             version="snapshot-${ref_name}-${revision::7}"
           fi
 
-          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
           asset_version="${version#v}"
-          echo "asset_version=${asset_version}" >> "${GITHUB_OUTPUT}"
-          echo "archive_name=openplanner_${asset_version}_source.tar.gz" >> "${GITHUB_OUTPUT}"
-          echo "skill_name=openplanner_${asset_version}_skill.tar.gz" >> "${GITHUB_OUTPUT}"
-          echo "sbom_name=openplanner_${asset_version}_sbom.spdx.json" >> "${GITHUB_OUTPUT}"
-          echo "checksums_name=openplanner_${asset_version}_checksums.txt" >> "${GITHUB_OUTPUT}"
-          echo "installer_name=install.sh" >> "${GITHUB_OUTPUT}"
+          archive="openplanner_${asset_version}_source.tar.gz"
+          skill="openplanner_${asset_version}_skill.tar.gz"
+          checksum="openplanner_${asset_version}_checksums.txt"
+          sbom="openplanner_${asset_version}_sbom.spdx.json"
+          installer="install.sh"
+          assets_json="$(printf '%s\n' \
+            "${installer}" \
+            "${checksum}" \
+            "openplanner_${asset_version}_darwin_amd64.tar.gz" \
+            "openplanner_${asset_version}_darwin_arm64.tar.gz" \
+            "openplanner_${asset_version}_linux_amd64.tar.gz" \
+            "openplanner_${asset_version}_linux_arm64.tar.gz" \
+            "${sbom}" \
+            "${skill}" \
+            "${archive}" \
+            | jq -R . | jq -cs .)"
 
-      - name: Build runner and skill archives
+          {
+            echo "archive=${archive}"
+            echo "asset_version=${asset_version}"
+            echo "checksum=${checksum}"
+            echo "installer=${installer}"
+            echo "revision=${revision}"
+            echo "sbom=${sbom}"
+            echo "skill=${skill}"
+            echo "version=${version}"
+            echo "assets_json=${assets_json}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Generate release SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/${{ steps.meta.outputs.sbom }}
+          artifact-name: ${{ steps.meta.outputs.sbom }}
+
+      - name: Build binary and skill archives
         env:
           ASSET_VERSION: ${{ steps.meta.outputs.asset_version }}
-          SKILL_NAME: ${{ steps.meta.outputs.skill_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          mkdir -p release-assets
           targets=(
             "darwin/arm64"
             "darwin/amd64"
@@ -108,92 +144,127 @@ jobs:
           for target in "${targets[@]}"; do
             IFS=/ read -r os arch <<< "${target}"
             name="openplanner_${ASSET_VERSION}_${os}_${arch}"
-            mkdir -p "release-assets/${name}"
-            GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "release-assets/${name}/openplanner" ./cmd/openplanner
-            tar -C release-assets -czf "release-assets/${name}.tar.gz" "${name}"
-            rm -rf "release-assets/${name}"
+            mkdir -p "dist/${name}"
+            GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/${name}/openplanner" ./cmd/openplanner
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+            rm -rf "dist/${name}"
           done
 
-          tar -czf "release-assets/${SKILL_NAME}" -C skills/openplanner SKILL.md
+          tar -czf "dist/${{ steps.meta.outputs.skill }}" -C skills/openplanner SKILL.md
 
       - name: Build installer
-        env:
-          INSTALLER_NAME: ${{ steps.meta.outputs.installer_name }}
-          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          sed "s/__OPENPLANNER_VERSION__/${VERSION}/g" scripts/install.sh > "release-assets/${INSTALLER_NAME}"
-          chmod 755 "release-assets/${INSTALLER_NAME}"
+          sed "s/__OPENPLANNER_VERSION__/${{ steps.meta.outputs.version }}/g" scripts/install.sh > "dist/${{ steps.meta.outputs.installer }}"
+          chmod 755 "dist/${{ steps.meta.outputs.installer }}"
 
-      - name: Build deterministic source archive
-        env:
-          ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
-          REVISION: ${{ steps.meta.outputs.revision }}
-          VERSION: ${{ steps.meta.outputs.version }}
+      - name: Build source archive and checksums
         run: |
-          mkdir -p release-assets/source-tree
-          git archive --format=tar --prefix="openplanner-${VERSION}/" "${REVISION}" \
-            | gzip -n > "release-assets/${ARCHIVE_NAME}"
-          tar -xzf "release-assets/${ARCHIVE_NAME}" -C release-assets/source-tree
-
-      - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
-        with:
-          path: ./release-assets/source-tree
-          output-file: ./release-assets/${{ steps.meta.outputs.sbom_name }}
-          format: spdx-json
-          upload-artifact: false
-          upload-release-assets: false
-
-      - name: Generate checksums
-        env:
-          ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
-          SBOM_NAME: ${{ steps.meta.outputs.sbom_name }}
-          CHECKSUMS_NAME: ${{ steps.meta.outputs.checksums_name }}
-          INSTALLER_NAME: ${{ steps.meta.outputs.installer_name }}
-        run: |
-          cd release-assets
-          sha256sum *.tar.gz "${SBOM_NAME}" "${INSTALLER_NAME}" > "${CHECKSUMS_NAME}"
+          asset_version="${{ steps.meta.outputs.asset_version }}"
+          git archive --format=tar.gz --prefix="openplanner_${asset_version}/" -o "dist/${{ steps.meta.outputs.archive }}" "${{ steps.meta.outputs.revision }}"
+          (
+            cd dist
+            shasum -a 256 *.tar.gz "${{ steps.meta.outputs.sbom }}" "${{ steps.meta.outputs.installer }}" > "${{ steps.meta.outputs.checksum }}"
+          )
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-assets
-          path: release-assets/*.*
+          path: dist/*
 
-      - name: Attest release provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
-          subject-path: ./release-assets/*.*
+          subject-path: |
+            dist/*
 
       - name: Attest SBOM
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
         with:
-          subject-path: ./release-assets/${{ steps.meta.outputs.archive_name }}
-          sbom-path: ./release-assets/${{ steps.meta.outputs.sbom_name }}
+          subject-path: dist/${{ steps.meta.outputs.archive }}
+          sbom-path: dist/${{ steps.meta.outputs.sbom }}
 
   publish-release:
     name: Publish GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: package-release
     runs-on: ubuntu-latest
-    environment: release
+    needs:
+      - package-release
+    environment:
+      name: release
     permissions:
       contents: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: release-assets
-          path: release-assets
+          path: dist
 
-      - name: Create or update GitHub Release
+      - name: Create draft GitHub Release from tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+          notes_file="docs/release-notes/${GITHUB_REF_NAME}.md"
+          release_json="$(gh release view "${GITHUB_REF_NAME}" --json isDraft 2>/dev/null || true)"
+          if [ -n "${release_json}" ]; then
+            is_draft="$(printf '%s\n' "${release_json}" | jq -r '.isDraft')"
+            if [ "${is_draft}" != "true" ]; then
+              echo "Release ${GITHUB_REF_NAME} already exists and is not a draft; refusing to mutate a published release." >&2
+              exit 1
+            fi
+            echo "Release already exists for ${GITHUB_REF_NAME}"
+            gh release edit "${GITHUB_REF_NAME}" --notes-file "${notes_file}"
+          else
             gh release create "${GITHUB_REF_NAME}" \
+              --draft \
               --verify-tag \
-              --generate-notes
+              --notes-file "${notes_file}"
           fi
 
-          gh release upload "${GITHUB_REF_NAME}" release-assets/*.* --clobber
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/* \
+            --clobber
+
+      - name: Verify draft GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ASSETS: ${{ needs.package-release.outputs.assets_json }}
+        run: |
+          release_json="$(gh release view "${GITHUB_REF_NAME}" --json isDraft,assets)"
+          is_draft="$(printf '%s\n' "${release_json}" | jq -r '.isDraft')"
+          [ "${is_draft}" = "true" ] || { echo "Release ${GITHUB_REF_NAME} is not draft before publish" >&2; exit 1; }
+
+          actual_assets="$(printf '%s\n' "${release_json}" | jq -c '[.assets[].name] | sort')"
+          expected_assets="$(printf '%s\n' "${EXPECTED_ASSETS}" | jq -c 'sort')"
+          [ "${actual_assets}" = "${expected_assets}" ] || {
+            echo "Draft release assets do not match expected set" >&2
+            echo "expected: ${expected_assets}" >&2
+            echo "actual:   ${actual_assets}" >&2
+            exit 1
+          }
+
+      - name: Publish draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+
+      - name: Verify published GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_json="$(gh release view "${GITHUB_REF_NAME}" --json isDraft,isPrerelease)"
+          is_draft="$(printf '%s\n' "${release_json}" | jq -r '.isDraft')"
+          is_prerelease="$(printf '%s\n' "${release_json}" | jq -r '.isPrerelease')"
+          [ "${is_draft}" = "false" ] || { echo "Release ${GITHUB_REF_NAME} is still draft" >&2; exit 1; }
+          [ "${is_prerelease}" = "false" ] || { echo "Release ${GITHUB_REF_NAME} is prerelease" >&2; exit 1; }
+
+          latest_tag="$(gh release view --json tagName --jq '.tagName')"
+          [ "${latest_tag}" = "${GITHUB_REF_NAME}" ] || { echo "Latest release is ${latest_tag}, expected ${GITHUB_REF_NAME}" >&2; exit 1; }

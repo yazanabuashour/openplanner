@@ -26,12 +26,17 @@ jobs:
             CONTRIBUTING.md
             SECURITY.md
             CODE_OF_CONDUCT.md
+            CHANGELOG.md
             .github/CODEOWNERS
             .github/PULL_REQUEST_TEMPLATE.md
             .github/dependabot.yml
             .github/workflows/pull-request.yml
             .github/workflows/release.yml
+            docs/security-operations.md
             docs/release-verification.md
+            scripts/validate-agent-skill.sh
+            scripts/validate-release-docs.sh
+            skills/openplanner/SKILL.md
           )
 
           for file in "${required_files[@]}"; do

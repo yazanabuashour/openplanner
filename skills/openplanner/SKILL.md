@@ -1,6 +1,6 @@
 ---
 name: openplanner
-description: Manage local calendar and task workflows through OpenPlanner's installed JSON runner; reject ambiguous dates, year-first slash dates, invalid times, missing titles, invalid ranges, unsupported recurrence, and non-positive limits directly without tools or file reads. For valid requests, pipe JSON to the installed runner; never inspect source, SQLite, or module-cache docs before the first runner call.
+description: "Manage local calendar and task workflows through OpenPlanner's installed JSON runner. Directly reject invalid requests in one final answer without tools, validation calls, or opening SKILL.md: ambiguous dates, year-first slash dates, invalid RFC3339 times like `2026-04-16 09:00`, missing titles, invalid ranges, hourly recurrence, non-positive limits, invalid task metadata, tag values with spaces like `needs review`, invalid reminders, and invalid attendees. For valid requests, pipe JSON to the installed runner; never inspect source, SQLite, or module-cache docs before the first runner call."
 license: MIT
 compatibility: Requires local filesystem access and an installed openplanner binary on PATH.
 metadata: { openplanner.repo: "https://github.com/yazanabuashour/openplanner", openplanner.runner: "openplanner planning", openplanner.skillArchive: "openplanner_<version>_skill.tar.gz" }
@@ -126,6 +126,11 @@ any CLI when the request has:
 | invalid event attendee role | require `required`, `optional`, `chair`, or `non_participant` |
 | invalid event attendee participation status | require `needs_action`, `accepted`, `declined`, `tentative`, or `delegated` |
 
+These direct-reject cases are final-answer-only. Do not run
+`{"action":"validate"}`, do not call `openplanner planning`, and do not inspect
+files first. If the user's request already contains an invalid value, answer
+with the required format or supported values in a single response.
+
 Never convert a year-first slash date to dashed ISO form; reject it. Never
 convert an invalid RFC3339 time like `2026-04-16 09:00` to
 `2026-04-16T09:00:00Z`; reject it. Explicit month/day/year dates with a year,
@@ -144,6 +149,8 @@ Pipe one JSON request to `openplanner planning` and answer only from JSON
 `event_task_links`, `icalendar`, or
 `rejection_reason`. Agenda results are already chronologically ordered. Pending
 reminder results are already chronologically ordered.
+For created or updated task answers, include the task title and date or datetime
+alongside requested metadata such as priority, status, and tags.
 
 Calendars:
 

@@ -144,5 +144,6 @@ are intentionally `n/a` unless a separate baseline is approved.
 
 Current reduced reports belong under `docs/agent-eval-results/`. Historical
 iteration artifacts should be archived under `docs/agent-eval-results/archive/`.
-The current eval-maturity and throughput reports predate the installed-runner
-rename and remain as historical evidence until the next eval run updates them.
+The current local agent-use release gate is
+[`docs/agent-eval-results/op-runner-2026-04-22-local-agent-use-final.md`](agent-eval-results/op-runner-2026-04-22-local-agent-use-final.md).
+Older eval-maturity and throughput reports remain as historical evidence.

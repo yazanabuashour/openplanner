@@ -20,6 +20,11 @@ agent's native skill system. The checksums file and GitHub attestations let
 users verify that the assets were produced by this repository's release
 workflow.
 
+The release workflow publishes through a draft-first path and verifies the
+draft asset set before publication. Published tags and assets should be treated
+as immutable; fix bad artifacts with a new patch release instead of replacing
+assets on an existing release.
+
 ## Verify a release
 
 Download the assets from the GitHub Release page for the tag you want to verify,
@@ -39,14 +44,16 @@ valid GitHub attestations for this repository.
 ## Verify the runner story
 
 Put the matching platform archive's `openplanner` binary on `PATH`, then run a
-validation request:
+version and validation requests:
 
 ```bash
+openplanner --version
 printf '%s\n' '{"action":"validate"}' | openplanner planning
 ```
 
-The command should print JSON with `rejected` set to `false` and `summary` set
-to `valid`.
+The version command should print `openplanner <tag>`. The planning validation
+command should print JSON with `rejected` set to `false` and `summary` set to
+`valid`.
 
 The release installer performs the same runner validation:
 

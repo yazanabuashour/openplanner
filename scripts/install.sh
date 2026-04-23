@@ -167,6 +167,21 @@ cp "openplanner_${asset_version}_${os}_${arch}/openplanner" "${install_dir}/open
 chmod 755 "${install_dir}/openplanner"
 
 log "Runner installed to ${install_dir}/openplanner"
+installed_version="$("${install_dir}/openplanner" --version)"
+log "Runner version: ${installed_version}"
+
+active_path="$(command -v openplanner 2>/dev/null || true)"
+if path_contains_dir "$install_dir"; then
+  [ -n "$active_path" ] || fail "openplanner is not callable even though ${install_dir} is on PATH"
+  active_version="$(openplanner --version 2>/dev/null || true)"
+  if [ "$active_version" != "$installed_version" ]; then
+    log ""
+    log "Warning: active openplanner resolves to ${active_path}, not ${install_dir}/openplanner."
+    log "Your current shell may still invoke another openplanner binary."
+    fail "active openplanner reports ${active_version:-unavailable}; expected ${installed_version}"
+  fi
+fi
+
 verify_runner "${install_dir}/openplanner"
 log "Runner verified with openplanner planning"
 log ""

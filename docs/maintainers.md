@@ -13,6 +13,11 @@ hardening blockers in [`docs/local-data-security.md`](local-data-security.md)
 aligned with changes to the runner, SQLite storage, iCalendar import/export,
 filesystem path handling, and the experimental CalDAV adapter.
 
+Recurring security operations are tracked in
+[docs/security-operations.md](security-operations.md). Use that runbook for
+dependency review cadence, advisory rehearsal, threat-model refreshes, and
+deeper testing expectations.
+
 ## Product surface decision
 
 The earlier library-first research direction is superseded for v1 by the
@@ -109,7 +114,12 @@ Current readiness assumptions:
   the portable skill archive, and release integrity assets.
 - Release packaging publishes binary archives, a skill archive, deterministic
   source archive, `SHA256SUMS`, SPDX SBOM, and GitHub attestations.
-- The runtime remains in process. Do not add deploy workflows, ports, or daemons unless the product surface changes intentionally.
+- The local agent-use deployment target is an installed runner on `PATH` plus
+  the matching registered skill. The runtime remains in process. Do not add
+  hosted deploy workflows, remote ports, daemons, or server operations unless
+  the product surface changes intentionally.
+- The experimental CalDAV adapter remains loopback-only compatibility tooling.
+  It is not the supported local agent-use deployment path.
 - Security reports are expected through GitHub private vulnerability reporting.
 
 Current review enforcement nuance:
@@ -118,31 +128,59 @@ Current review enforcement nuance:
 - `main` requires pull requests, status checks, conversation resolution, and one approving review, but code-owner review enforcement and admin enforcement remain off so the repository does not become unmergeable.
 - Tighten code-owner review enforcement, admin bypass, and maintainer isolation once a second maintainer can satisfy the review requirement.
 
+Untrusted pull request policy:
+
+- Pull request workflows must stay fork-safe and use read-only `contents` permission unless a specific trusted workflow boundary justifies more.
+- Do not expose release, package, deployment, or private infrastructure secrets to code from untrusted forks.
+- Avoid `pull_request_target` for workflows that check out or execute contributor-controlled code.
+- Dependency review, policy checks, formatting, linting, vulnerability checks, skill validation, and tests are acceptable untrusted PR validation surfaces when they run without secrets.
+
+Maintainer and automation isolation:
+
+- Prefer `GITHUB_TOKEN` with explicit job-scoped permissions over personal access tokens or long-lived bot credentials.
+- Use a dedicated low-privilege bot identity only when new automation needs privileges that `GITHUB_TOKEN` cannot safely provide.
+- Keep release writes behind the protected `release` environment.
+- Enable code-owner review enforcement, stricter admin bypass policy, and stronger review separation only after at least two maintainers can satisfy those controls without blocking routine maintenance.
+- Do not use self-hosted runners for untrusted pull requests. Only consider self-hosted runners for trusted branches or tags after documenting isolation, secret exposure, cleanup, and network-access controls.
+
 When changing GitHub settings, keep the repo aligned with:
 
 - [SECURITY.md](../SECURITY.md) for disclosure handling and patch timing.
+- [docs/security-operations.md](security-operations.md) for recurring security operations and deeper testing expectations.
 - [.github/CODEOWNERS](../.github/CODEOWNERS) for sensitive file ownership.
 - [.github/workflows/pull-request.yml](../.github/workflows/pull-request.yml) for fork-safe checks.
 - [.github/workflows/release.yml](../.github/workflows/release.yml) for release verification, packaging, attestations, and publication.
 
 ## Release notes
 
+Public releases use annotated semantic version tags in the `v0.y.z` range. The
+release contract is a tagged release for the `openplanner` binary, the portable
+skill payload, and local runtime source artifacts.
+
 The release workflow has two paths:
 
 - `workflow_dispatch` packages and attests a snapshot from a chosen ref, then uploads workflow artifacts for manual inspection.
-- Pushing a `v0.y.z` tag runs the same verification and packaging steps, then
-  publishes a GitHub Release and uploads runner archives, the skill archive, the
-  source archive, `SHA256SUMS`, and SBOM.
+- Pushing a `v0.y.z` tag runs the same verification and packaging steps, then publishes a GitHub Release through a verified draft-first path.
 
 The first public tag should be `v0.1.0`. Users consume OpenPlanner through the
 runner archive or installer plus the matching portable skill payload.
+
+Before tagging, add `docs/release-notes/<tag>.md`, update `CHANGELOG.md`, and
+run `./scripts/validate-release-docs.sh <tag>` locally. The release workflow
+runs the same check before publishing and does not fall back to generated GitHub
+release notes.
 
 Before tagging:
 
 1. Run the release workflow in `workflow_dispatch` mode against the intended ref.
 2. Inspect the uploaded runner archives, skill archive, source archive,
-   `SHA256SUMS`, and SBOM.
+   checksums, and SBOM.
 3. Confirm the release assets match [docs/release-verification.md](../docs/release-verification.md).
 4. Tag the release only after manual review is complete.
 
 The publish job is the only workflow path that needs `contents: write` and the `release` environment. Do not widen those permissions to pull requests or non-release jobs unless the product surface changes.
+
+After the draft-first workflow is active, enable GitHub release immutability in
+repository settings for future releases. Published release tags and assets
+should then be treated as immutable; fix bad artifacts with a new patch release
+instead of replacing assets on an existing release.
