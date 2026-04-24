@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yazanabuashour/openplanner/internal/caldav"
 	"github.com/yazanabuashour/openplanner/internal/runner"
 )
 
@@ -49,12 +47,30 @@ func TestRunHelp(t *testing.T) {
 	for _, want := range []string{
 		"openplanner --version",
 		"openplanner planning",
-		"openplanner caldav",
-		"CalDAV adapter is experimental",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "caldav") || strings.Contains(stdout.String(), "CalDAV") {
+		t.Fatalf("help output mentions removed CalDAV command:\n%s", stdout.String())
+	}
+}
+
+func TestRunUnknownSubcommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"caldav"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 2 {
+		t.Fatalf("exit = %d, want 2", exitCode)
+	}
+	if !strings.Contains(stderr.String(), `unknown subcommand "caldav"`) {
+		t.Fatalf("stderr = %q, want unknown subcommand error", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 }
 
@@ -261,98 +277,5 @@ func TestPlanningRunnerOversizedJSONExitsBeforeOpeningDatabase(t *testing.T) {
 	}
 	if _, err := os.Stat(databasePath); !os.IsNotExist(err) {
 		t.Fatalf("database path exists after oversized decode rejection: %v", err)
-	}
-}
-
-func TestCalDAVRunnerPassesDBFlagAndAddr(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "caldav.db")
-	var captured caldav.Options
-	oldServe := serveCalDAV
-	serveCalDAV = func(_ context.Context, options caldav.Options) error {
-		captured = options
-		return nil
-	}
-	t.Cleanup(func() {
-		serveCalDAV = oldServe
-	})
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"caldav", "--db", databasePath, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
-	}
-	if captured.DatabasePath != databasePath || captured.Addr != "127.0.0.1:0" {
-		t.Fatalf("captured options = %#v", captured)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "experimental CalDAV") {
-		t.Fatalf("stderr = %q, want startup notice", stderr.String())
-	}
-}
-
-func TestCalDAVRunnerUsesDatabaseEnvWhenDBFlagOmitted(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "env-caldav.db")
-	t.Setenv("OPENPLANNER_DATABASE_PATH", databasePath)
-	var captured caldav.Options
-	oldServe := serveCalDAV
-	serveCalDAV = func(_ context.Context, options caldav.Options) error {
-		captured = options
-		return nil
-	}
-	t.Cleanup(func() {
-		serveCalDAV = oldServe
-	})
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"caldav"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit = %d, stderr = %s", exitCode, stderr.String())
-	}
-	if captured.DatabasePath != databasePath {
-		t.Fatalf("database path = %q, want env path %q", captured.DatabasePath, databasePath)
-	}
-}
-
-func TestCalDAVRunnerRejectsNonLoopbackAddrBeforeServing(t *testing.T) {
-	var called bool
-	oldServe := serveCalDAV
-	serveCalDAV = func(_ context.Context, _ caldav.Options) error {
-		called = true
-		return nil
-	}
-	t.Cleanup(func() {
-		serveCalDAV = oldServe
-	})
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"caldav", "--addr", "0.0.0.0:8080"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode == 0 {
-		t.Fatal("exit = 0, want non-zero")
-	}
-	if called {
-		t.Fatal("serveCalDAV was called for rejected non-loopback addr")
-	}
-	if !strings.Contains(stderr.String(), "loopback") {
-		t.Fatalf("stderr = %q, want loopback rejection", stderr.String())
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-}
-
-func TestCalDAVRunnerRejectsPositionalArguments(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"caldav", "extra"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode == 0 {
-		t.Fatal("exit = 0, want non-zero")
-	}
-	if !strings.Contains(stderr.String(), "does not accept positional") {
-		t.Fatalf("stderr = %q, want positional argument error", stderr.String())
 	}
 }

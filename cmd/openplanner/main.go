@@ -9,11 +9,9 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/yazanabuashour/openplanner/internal/caldav"
 	"github.com/yazanabuashour/openplanner/internal/runner"
 )
 
-var serveCalDAV = caldav.ListenAndServe
 var version string
 
 func main() {
@@ -41,8 +39,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	case "planning":
 		return runPlanning(args[1:], stdin, stdout, stderr)
-	case "caldav":
-		return runCalDAV(args[1:], stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand %q\n", args[0])
 		return 2
@@ -88,9 +84,6 @@ func writeUsage(w io.Writer) error {
 	_, err := fmt.Fprint(w, `Usage:
   openplanner --version
   openplanner planning [--db path] < request.json
-  openplanner caldav [--db path] [--addr host:port]
-
-The agent-facing product surface is openplanner planning. The CalDAV adapter is experimental, local-only compatibility tooling.
 `)
 	return err
 }
@@ -109,35 +102,4 @@ func resolvedVersion(linkerVersion string, info *debug.BuildInfo, ok bool) strin
 		return info.Main.Version
 	}
 	return "dev"
-}
-
-func runCalDAV(args []string, stderr io.Writer) int {
-	flags := flag.NewFlagSet("caldav", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	databasePath := flags.String("db", "", "SQLite database path for tests or manual debugging")
-	addr := flags.String("addr", "127.0.0.1:8080", "CalDAV bind address")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if flags.NArg() != 0 {
-		_, _ = fmt.Fprintln(stderr, "caldav does not accept positional arguments")
-		return 2
-	}
-
-	resolvedDatabasePath := *databasePath
-	if resolvedDatabasePath == "" {
-		resolvedDatabasePath = os.Getenv("OPENPLANNER_DATABASE_PATH")
-	}
-
-	if err := caldav.ValidateAddr(*addr); err != nil {
-		_, _ = fmt.Fprintf(stderr, "invalid caldav addr: %v\n", err)
-		return 2
-	}
-
-	_, _ = fmt.Fprintf(stderr, "serving experimental CalDAV adapter on %s\n", *addr)
-	if err := serveCalDAV(context.Background(), caldav.Options{Addr: *addr, DatabasePath: resolvedDatabasePath}); err != nil {
-		_, _ = fmt.Fprintf(stderr, "serve caldav: %v\n", err)
-		return 1
-	}
-	return 0
 }

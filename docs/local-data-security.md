@@ -9,8 +9,8 @@ scenarios, and the follow-up hardening work that should block broader exposure.
 
 OpenPlanner's supported product surface remains the installed
 `openplanner planning` JSON runner plus the portable `skills/openplanner`
-payload. Internal Go packages, the SQLite schema, and the experimental CalDAV
-adapter support that surface but are not public compatibility contracts.
+payload. Internal Go packages and the SQLite schema support that surface but
+are not public compatibility contracts.
 
 The JSON runner reads one structured JSON request from stdin, validates and
 normalizes it, and reads or writes the selected SQLite database. By default the
@@ -29,13 +29,6 @@ The `import_icalendar` runner action accepts complete `.ics` text in the JSON
 action returns complete `.ics` text in JSON and does not write export files.
 Agents and users choose where to store exported content.
 
-The experimental `openplanner caldav` adapter uses the same local SQLite-backed
-service and the same database path precedence rules. It is unauthenticated,
-does not provide TLS, and exists for local compatibility research. It is
-loopback-only: bind addresses must be `localhost:<port>` or loopback IP
-literals such as `127.0.0.1:<port>` or `[::1]:<port>`. Non-loopback, wildcard,
-and empty-host bind addresses are rejected.
-
 ## Sensitive Data
 
 Treat the following as sensitive local planning data:
@@ -46,8 +39,8 @@ Treat the following as sensitive local planning data:
 - Imported `.ics` content and provider migration fixtures before sanitization.
 - Calendar names, event and task titles, descriptions, locations, reminders,
   attendees, task metadata, recurrence exceptions, links, and completion state.
-- Raw logs from manual import, export, CalDAV, or agent-eval runs when they
-  include user planning content.
+- Raw logs from manual import, export, or agent-eval runs when they include
+  user planning content.
 
 Committed docs, reports, and artifacts must use repo-relative paths or neutral
 placeholders such as `<database-path>`, `<backup-dir>`, and `<run-root>`.
@@ -60,11 +53,11 @@ data, or machine-absolute filesystem paths.
 
 The main confidentiality risk is accidental disclosure of local planning data
 through database files, backups, exports, temp run directories, logs, or copied
-`.ics` payloads. The runner and CalDAV adapter create the data directory with
-private permissions where supported. OpenPlanner also pre-creates and corrects
-the selected SQLite database file with owner-only permissions on POSIX-style
-filesystems, and corrects SQLite sidecar files such as `-journal`, `-wal`, and
-`-shm` when they exist.
+`.ics` payloads. The runner creates the data directory with private permissions
+where supported. OpenPlanner also pre-creates and corrects the selected SQLite
+database file with owner-only permissions on POSIX-style filesystems, and
+corrects SQLite sidecar files such as `-journal`, `-wal`, and `-shm` when they
+exist.
 
 Current mitigations:
 
@@ -85,7 +78,6 @@ The main integrity risks are destructive or confusing local writes through:
 
 - malformed or hostile `.ics` imports
 - repeat imports that update rows by iCalendar UID within a calendar
-- CalDAV `PUT` and `DELETE`
 - broad delete actions from the JSON runner
 - caller-selected database paths that point at the wrong local file
 
@@ -102,42 +94,23 @@ Current mitigations:
   partial data where validation fails.
 - iCalendar imports reject `content` larger than 2 MiB or more than 2,000 total
   `VEVENT`/`VTODO` base and override components before writing imported data.
-- CalDAV `PUT` only accepts one base `VEVENT` or `VTODO` per request.
-- CalDAV `PUT` rejects request bodies larger than 2 MiB instead of truncating
-  oversized input.
-- CalDAV resource resolution is scoped to the requested calendar.
 
 Remaining hardening:
 
 - Add parser-focused fuzz and regression coverage in `op-5gj`.
-- Keep CalDAV experimental and loopback-only.
 
-### Parser And Server Denial Of Service
+### Parser Denial Of Service
 
 The highest current denial-of-service risk is local parsing of unusual JSON,
-`.ics`, or XML payloads. OpenPlanner applies explicit local input ceilings to
-the parser and server entrypoints:
+or `.ics` payloads. OpenPlanner applies explicit local input ceilings to the
+parser entrypoints:
 
 - `openplanner planning` reads one JSON stdin request up to 4 MiB.
 - `import_icalendar` accepts iCalendar `content` up to 2 MiB and 2,000 total
   `VEVENT`/`VTODO` base and override components.
-- CalDAV `PROPFIND` and `REPORT` XML request bodies are limited to 2 MiB and an
-  XML depth of 64.
-- CalDAV `PUT` request bodies are limited to 2 MiB.
 
 Parser hardening tests for malformed, oversized, nested, and unusual inputs are
 tracked in `op-5gj`.
-
-### Cross-Calendar Leakage
-
-CalDAV listing and object reads expose local calendar data to any client that
-can reach the adapter. The adapter rejects non-loopback bind addresses so this
-surface remains local-only. Within the adapter, object resolution should remain
-scoped to the target calendar, and `calendar-multiget` requests for missing or
-cross-calendar hrefs should return not-found properties instead of content.
-Existing tests cover those baseline behaviors. Any future remote calendar
-service would need a separate product decision and design for access control,
-authentication, and transport.
 
 ### Maintainer And Supply-Chain Security
 
@@ -150,8 +123,8 @@ remain tracked by `op-4wm`, and maintainer isolation remains tracked by
 
 ## Testing Plan
 
-Routine changes that touch local data handling, iCalendar import/export,
-CalDAV, runner validation, or SQLite storage should run:
+Routine changes that touch local data handling, iCalendar import/export, runner
+validation, or SQLite storage should run:
 
 ```bash
 mise exec -- make check
@@ -170,9 +143,6 @@ Use targeted tests for:
 - iCalendar import malformed content, unsupported components, recurrence
   exceptions, reminders, attendees, task metadata, provider fixtures, and repeat
   imports.
-- CalDAV discovery, `PROPFIND`, `REPORT`, `calendar-multiget`, `GET`, `HEAD`,
-  `PUT`, `DELETE`, ETags, cross-calendar hrefs, invalid content types, and
-  malformed calendar objects.
 - SQLite migration and local data preservation across schema changes.
 - Documentation policy checks that reject machine-absolute paths in committed
   docs and reports.
@@ -180,16 +150,12 @@ Use targeted tests for:
 Security-specific follow-ups:
 
 - `op-5gj`: add parser hardening fuzz and regression coverage.
-- `op-d7k`: enforce loopback-only CalDAV local compatibility mode.
 
 ## Operational Guidance
 
 - Prefer the JSON runner for normal local planning work.
-- Keep CalDAV disabled unless actively testing local client compatibility.
-- Bind CalDAV to loopback only; non-loopback bind addresses are rejected.
-- Stop active runner and CalDAV usage before backing up or restoring the
-  database.
+- Stop active runner usage before backing up or restoring the database.
 - Store database backups and iCalendar exports only in locations covered by the
   user's normal encrypted backup process when the planning data is sensitive.
-- Do not upload local databases, backups, raw CalDAV logs, or real `.ics`
-  exports to public issues, pull requests, eval artifacts, or release assets.
+- Do not upload local databases, backups, raw logs, or real `.ics` exports to
+  public issues, pull requests, eval artifacts, or release assets.

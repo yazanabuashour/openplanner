@@ -79,10 +79,6 @@ checks. `OPENPLANNER_DATABASE_PATH` is the only supported environment override
 for runtime storage; future runtime config belongs in the local database instead
 of additional environment variables.
 
-The experimental CalDAV adapter is not part of the supported local agent-use
-deployment path. Keep CalDAV disabled unless you are explicitly testing local
-client compatibility on loopback.
-
 ## Eval Evidence
 
 The local agent-use runner/skill gate passed the current 39-scenario production
@@ -295,7 +291,7 @@ or install from `main`.
 - [docs/maintainers.md](docs/maintainers.md) documents Beads-based maintainer workflow and repo administration notes.
 - [docs/release-verification.md](docs/release-verification.md) explains the published release assets and how to verify them.
 - [docs/local-data-backup.md](docs/local-data-backup.md) explains backup, restore, and recovery checks for local OpenPlanner data.
-- [docs/local-data-security.md](docs/local-data-security.md) documents the local data threat model, CalDAV exposure limits, and parser/server hardening follow-ups.
+- [docs/local-data-security.md](docs/local-data-security.md) documents the local data threat model and parser hardening follow-ups.
 - [docs/security-operations.md](docs/security-operations.md) defines recurring security review, advisory rehearsal, and high-risk surface review expectations.
 - [docs/agent-evals.md](docs/agent-evals.md) explains how to evaluate production agent workflows.
 - [internal/runner](internal/runner) contains the JSON-friendly task facade for production agent workflows.

@@ -11,7 +11,7 @@ package registry. Keep maintainer docs honest about that status.
 Local calendar and task data is sensitive user data. Keep the threat model and
 hardening blockers in [`docs/local-data-security.md`](local-data-security.md)
 aligned with changes to the runner, SQLite storage, iCalendar import/export,
-filesystem path handling, and the experimental CalDAV adapter.
+and filesystem path handling.
 
 Recurring security operations are tracked in
 [docs/security-operations.md](security-operations.md). Use that runbook for
@@ -118,8 +118,6 @@ Current readiness assumptions:
   the matching registered skill. The runtime remains in process. Do not add
   hosted deploy workflows, remote ports, daemons, or server operations unless
   the product surface changes intentionally.
-- The experimental CalDAV adapter remains loopback-only compatibility tooling.
-  It is not the supported local agent-use deployment path.
 - Security reports are expected through GitHub private vulnerability reporting.
 
 Current review enforcement nuance:

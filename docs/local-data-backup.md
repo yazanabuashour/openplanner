@@ -28,10 +28,6 @@ When both are present, `openplanner planning --db <database-path>` wins over
 `OPENPLANNER_DATABASE_PATH` is the only supported environment-variable runtime
 override. Other runtime configuration is stored in the local SQLite database.
 
-The experimental `openplanner caldav` adapter uses the same database path rules:
-`--db <database-path>` wins over `OPENPLANNER_DATABASE_PATH`, and the default
-path is used when neither override is present.
-
 ## File Permissions
 
 On POSIX-style filesystems, OpenPlanner creates or corrects its local data
@@ -46,8 +42,7 @@ backup process.
 
 ## Back Up Data
 
-1. Stop active OpenPlanner runner usage and stop any local CalDAV adapter using
-   the same database.
+1. Stop active OpenPlanner runner usage against the same database.
 2. Pick the database path to back up. Use the default path above unless you run
    OpenPlanner with `OPENPLANNER_DATABASE_PATH` or `--db <database-path>`.
 3. Copy the database file to a timestamped backup path:
@@ -65,8 +60,7 @@ is sensitive.
 
 ## Restore Data
 
-1. Stop active OpenPlanner runner usage and stop any local CalDAV adapter using
-   the same database.
+1. Stop active OpenPlanner runner usage against the same database.
 2. Move the current database aside before replacing it:
 
 ```bash
@@ -114,5 +108,4 @@ interchange. Use database-file backup and restore when you need complete local
 OpenPlanner recovery.
 
 Do not upload local databases, backups, real iCalendar exports, or raw import
-and CalDAV logs to public issues, pull requests, eval artifacts, or release
-assets.
+logs to public issues, pull requests, eval artifacts, or release assets.
