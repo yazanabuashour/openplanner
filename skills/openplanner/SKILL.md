@@ -19,7 +19,7 @@ Send one JSON request on stdin and answer only from the JSON result on stdout.
 Use the default database path unless the user names a specific database or you
 are using an isolated test database. For isolated runs, set
 `OPENPLANNER_DATABASE_PATH=<path>` or pass `--db <path>`; `--db` wins when both
-are present.
+are present. Do not depend on other OpenPlanner runtime environment variables.
 
 Supported routine actions are:
 

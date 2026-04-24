@@ -275,6 +275,9 @@ func TestCodexArgsForSingleAndMultiTurn(t *testing.T) {
 	if !containsArg(singleArgs, "--ephemeral") {
 		t.Fatalf("single-turn args missing --ephemeral: %v", singleArgs)
 	}
+	if !containsArg(singleArgs, "--ignore-user-config") {
+		t.Fatalf("single-turn args missing --ignore-user-config: %v", singleArgs)
+	}
 	if !containsArgPair(singleArgs, "--add-dir", filepath.Join("run-root", "shared-cache")) {
 		t.Fatalf("single-turn args missing shared cache writable root: %v", singleArgs)
 	}
@@ -283,6 +286,9 @@ func TestCodexArgsForSingleAndMultiTurn(t *testing.T) {
 	firstArgs := codexArgsForTurn("run-root/production/multi/repo", "run-root/production/multi", multi, scenarioTurn{Prompt: "first"}, 1, "", cache)
 	if containsArg(firstArgs, "--ephemeral") {
 		t.Fatalf("first multi-turn args must persist session: %v", firstArgs)
+	}
+	if !containsArg(firstArgs, "--ignore-user-config") {
+		t.Fatalf("first multi-turn args missing --ignore-user-config: %v", firstArgs)
 	}
 	resumeArgs := codexArgsForTurn("run-root/production/multi/repo", "run-root/production/multi", multi, scenarioTurn{Prompt: "second"}, 2, "session-123", cache)
 	if len(resumeArgs) < 5 || resumeArgs[0] != "exec" || resumeArgs[1] != "-C" || resumeArgs[2] != "run-root/production/multi/repo" {
@@ -293,6 +299,9 @@ func TestCodexArgsForSingleAndMultiTurn(t *testing.T) {
 	}
 	if containsArg(resumeArgs, "--ephemeral") {
 		t.Fatalf("resume args must not be ephemeral: %v", resumeArgs)
+	}
+	if !containsArg(resumeArgs, "--ignore-user-config") {
+		t.Fatalf("resume args missing --ignore-user-config: %v", resumeArgs)
 	}
 	if resumeArgs[len(resumeArgs)-2] != "session-123" || resumeArgs[len(resumeArgs)-1] != "second" {
 		t.Fatalf("resume args must end with session id and prompt: %v", resumeArgs)
@@ -308,6 +317,7 @@ func TestEvalEnvCacheModesAndPrewarmArgs(t *testing.T) {
 
 	sharedEnv := strings.Join(evalEnv(runDir, dbPath, cacheConfig{Mode: cacheModeShared, RunRoot: runRoot}), "\n")
 	for _, want := range []string{
+		"CODEX_HOME=" + filepath.Join(runRoot, "codex-home"),
 		"OPENPLANNER_DATABASE_PATH=" + dbPath,
 		"GOCACHE=" + filepath.Join(runRoot, "shared-cache", "gocache"),
 		"GOMODCACHE=" + filepath.Join(runRoot, "shared-cache", "gomodcache"),
@@ -438,6 +448,100 @@ func TestUnsupportedWorkflowScoring(t *testing.T) {
 	score = productionScoreFor([]runResult{result}, selected, true)
 	if !score.Passed {
 		t.Fatalf("unsupported workflow score should not fail solely because the agent inspected the production skill: %#v", score)
+	}
+}
+
+func TestCountNewSessionFilesUsesEvalCodexHome(t *testing.T) {
+	t.Parallel()
+
+	runRoot := t.TempDir()
+	sessionsDir := filepath.Join(evalCodexHome(runRoot), "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := time.Now()
+	oldPath := filepath.Join(sessionsDir, "old.jsonl")
+	newPath := filepath.Join(sessionsDir, "new.jsonl")
+	otherPath := filepath.Join(sessionsDir, "other.jsonl")
+	for path, content := range map[string]string{
+		oldPath:   runRoot,
+		newPath:   runRoot,
+		otherPath: "different run root",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(oldPath, marker.Add(-time.Hour), marker.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newPath, marker.Add(time.Hour), marker.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(otherPath, marker.Add(time.Hour), marker.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := countNewSessionFiles(marker, runRoot); got != 1 {
+		t.Fatalf("countNewSessionFiles() = %d, want 1", got)
+	}
+}
+
+func TestSetupEvalCodexHomeCopiesOnlyAuth(t *testing.T) {
+	sourceHome := filepath.Join(t.TempDir(), "source-codex")
+	if err := os.MkdirAll(filepath.Join(sourceHome, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "auth.json"), []byte(`{"token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "config.toml"), []byte("model = \"custom\""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "sessions", "session.jsonl"), []byte("session"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runRoot := t.TempDir()
+	if err := setupEvalCodexHomeFromSource(runRoot, sourceHome); err != nil {
+		t.Fatalf("setupEvalCodexHomeFromSource(): %v", err)
+	}
+
+	codexHome := evalCodexHome(runRoot)
+	authPath := filepath.Join(codexHome, "auth.json")
+	authBytes, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read copied auth: %v", err)
+	}
+	if string(authBytes) != `{"token":"secret"}` {
+		t.Fatalf("auth content = %q, want copied source auth", authBytes)
+	}
+	info, err := os.Lstat(authPath)
+	if err != nil {
+		t.Fatalf("lstat copied auth: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("copied auth must not be a symlink")
+	}
+	for _, unwanted := range []string{"config.toml", filepath.Join("sessions", "session.jsonl")} {
+		if _, err := os.Stat(filepath.Join(codexHome, unwanted)); !os.IsNotExist(err) {
+			t.Fatalf("unexpected copied %s: stat error = %v", unwanted, err)
+		}
+	}
+	homeInfo, err := os.Stat(codexHome)
+	if err != nil {
+		t.Fatalf("stat eval codex home: %v", err)
+	}
+	if homeInfo.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("eval codex home permissions = %#o, want private", homeInfo.Mode().Perm())
+	}
+}
+
+func TestSetupEvalCodexHomeRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	err := setupEvalCodexHomeFromSource(t.TempDir(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "run codex login") {
+		t.Fatalf("setupEvalCodexHomeFromSource() error = %v, want login guidance", err)
 	}
 }
 

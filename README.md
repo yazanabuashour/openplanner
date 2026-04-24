@@ -75,7 +75,9 @@ matching skill with your agent, and letting the runner use its default SQLite
 path at `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. For an
 isolated or test planner, set `OPENPLANNER_DATABASE_PATH=<database-path>` before
 agent runs or pass `openplanner planning --db <database-path>` during manual
-checks.
+checks. `OPENPLANNER_DATABASE_PATH` is the only supported environment override
+for runtime storage; future runtime config belongs in the local database instead
+of additional environment variables.
 
 The experimental CalDAV adapter is not part of the supported local agent-use
 deployment path. Keep CalDAV disabled unless you are explicitly testing local
@@ -115,7 +117,9 @@ request, performs the local planning operation, and writes structured JSON to
 stdout. By default, it stores SQLite data at
 `${XDG_DATA_HOME:-~/.local/share}/openplanner/openplanner.db`. Override the path
 with `OPENPLANNER_DATABASE_PATH` or `openplanner planning --db <path>`; `--db`
-wins when both are present. See [docs/local-data-backup.md](docs/local-data-backup.md)
+wins when both are present. Runtime configuration beyond the database path is
+stored in the SQLite database, not in separate environment variables. See
+[docs/local-data-backup.md](docs/local-data-backup.md)
 for backup, restore, and recovery verification guidance for local data, and
 [docs/local-data-security.md](docs/local-data-security.md) for the local
 planning data security model.

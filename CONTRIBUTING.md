@@ -50,7 +50,9 @@ Before `1.0`, compatibility is best effort and may change between releases. The
 supported product surface is the installed `openplanner` JSON runner and the
 Agent Skills-compatible `skills/openplanner` payload. SQLite storage defaults to
 `${XDG_DATA_HOME:-~/.local/share}/openplanner`, plus explicit path override
-support. No compatibility promise is made for a public SDK, REST API, hosted
+support through `OPENPLANNER_DATABASE_PATH` or `--db`. Do not add new runtime
+environment-variable configuration; store non-path runtime config in the local
+database. No compatibility promise is made for a public SDK, REST API, hosted
 service, background process, or web UI because none is shipped as a v1 product
 surface.
 

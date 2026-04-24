@@ -58,6 +58,12 @@ before installing the production skill and a private `openplanner` runner binary
 The production skill is copied byte-for-byte to
 `.agents/skills/openplanner/SKILL.md` for the Codex eval harness.
 
+The harness creates an isolated Codex home at `<run-root>/codex-home` for every
+run. It copies only the user's Codex `auth.json` into that directory, sets
+`CODEX_HOME` for all Codex CLI calls, and runs `codex exec` with
+`--ignore-user-config` so eval sessions and config-derived behavior do not
+pollute or depend on the user's normal Codex home.
+
 The harness renders model-visible context with `codex debug prompt-input` and
 fails preflight unless `openplanner` appears as an available project skill, the
 skill path points at the Codex eval harness install path, the installed skill
@@ -66,9 +72,10 @@ block contains OpenPlanner runner commands, JSON shapes, validation rules, or
 product-agent behavior.
 
 Single-turn scenarios use `codex exec --ephemeral`. Multi-turn scenarios use one
-persisted eval session per scenario: the first turn creates a session in the
-throwaway run directory context, and later turns use `codex exec resume` with
-explicit writable roots for the scenario run directory and shared Go cache.
+persisted eval session per scenario under `<run-root>/codex-home`: the first
+turn creates a session in the throwaway run directory context, and later turns
+use `codex exec resume` with explicit writable roots for the scenario run
+directory and shared Go cache.
 
 The harness runs independent scenario jobs with `--parallel 4` by default. Use
 `--parallel 1` when serial execution is needed for debugging or manual log

@@ -25,6 +25,8 @@ You can override the database path in two ways:
 
 When both are present, `openplanner planning --db <database-path>` wins over
 `OPENPLANNER_DATABASE_PATH`. When neither is present, the default path is used.
+`OPENPLANNER_DATABASE_PATH` is the only supported environment-variable runtime
+override. Other runtime configuration is stored in the local SQLite database.
 
 The experimental `openplanner caldav` adapter uses the same database path rules:
 `--db <database-path>` wins over `OPENPLANNER_DATABASE_PATH`, and the default

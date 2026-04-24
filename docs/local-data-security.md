@@ -18,6 +18,8 @@ database is stored at the XDG data location documented in
 [`docs/local-data-backup.md`](local-data-backup.md). Callers may override that
 path with `openplanner planning --db <database-path>` or
 `OPENPLANNER_DATABASE_PATH=<database-path>`; `--db` wins when both are present.
+`OPENPLANNER_DATABASE_PATH` is the only supported environment-variable runtime
+override; other runtime configuration is stored in the local SQLite database.
 Those path inputs are trusted caller-controlled filesystem inputs. OpenPlanner
 does not sandbox database paths, prevent access to caller-selected locations, or
 provide multi-user access control around local files.

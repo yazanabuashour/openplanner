@@ -25,7 +25,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8, 9})
 	assertSchemaObjects(t, repository.db, []string{
 		"calendars",
 		"event_attendees",
@@ -35,6 +35,7 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"events",
 		"events_calendar_ical_uid_idx",
 		"events_calendar_idx",
+		"openplanner_config",
 		"recurrence_occurrence_states",
 		"recurrence_occurrence_states_owner_idx",
 		"reminder_dismissals",
@@ -65,6 +66,11 @@ func TestOpenCreatesCurrentSchemaAndRecordsInitialMigration(t *testing.T) {
 		"time_zone",
 		"ical_uid",
 	})
+	assertTableColumns(t, repository.db, "openplanner_config", []string{
+		"key",
+		"value_json",
+		"updated_at",
+	})
 }
 
 func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
@@ -83,7 +89,7 @@ func TestOpenMigratesLegacyBootstrapDatabaseInPlace(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
+	assertMigrationVersions(t, repository.db, []int{1, 2, 3, 4, 5, 6, 7, 8, 9})
 
 	calendars, err := repository.ListCalendars()
 	if err != nil {
@@ -159,7 +165,7 @@ func TestOpenMigrationRunnerIsIdempotent(t *testing.T) {
 		}
 	}()
 
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6, 7, 8})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6, 7, 8, 9})
 
 	calendars, err := reopened.ListCalendars()
 	if err != nil {
@@ -182,7 +188,7 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version INTEGER PRIMARY KEY
 		);
-		INSERT INTO schema_migrations (version) VALUES (9);
+		INSERT INTO schema_migrations (version) VALUES (10);
 	`); err != nil {
 		t.Fatalf("seed future schema version: %v", err)
 	}
@@ -195,8 +201,114 @@ func TestOpenRejectsDatabaseWithNewerMigrationVersion(t *testing.T) {
 		_ = repository.Close()
 		t.Fatal("Open() error = nil, want newer schema version error")
 	}
-	if !strings.Contains(err.Error(), "database schema version 9 is newer than supported version 8") {
+	if !strings.Contains(err.Error(), "database schema version 10 is newer than supported version 9") {
 		t.Fatalf("Open() error = %v, want newer schema version error", err)
+	}
+}
+
+func TestConfigValueLifecycle(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	updatedAt := time.Date(2026, 4, 24, 12, 30, 0, 0, time.UTC)
+	missing, err := repository.GetConfigValue("runner.default_limit")
+	if err != nil {
+		t.Fatalf("GetConfigValue(missing): %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("missing config value = %#v, want nil", missing)
+	}
+
+	created, err := repository.UpsertConfigValue(UpsertConfigValueParams{
+		Key:       "runner.default_limit",
+		ValueJSON: `{"value":10}`,
+		UpdatedAt: updatedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpsertConfigValue(create): %v", err)
+	}
+	if created.Key != "runner.default_limit" || created.ValueJSON != `{"value":10}` || !created.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("created config value = %#v", created)
+	}
+
+	reloaded, err := repository.GetConfigValue("runner.default_limit")
+	if err != nil {
+		t.Fatalf("GetConfigValue(): %v", err)
+	}
+	if reloaded == nil || reloaded.ValueJSON != `{"value":10}` {
+		t.Fatalf("reloaded config value = %#v", reloaded)
+	}
+
+	updated, err := repository.UpsertConfigValue(UpsertConfigValueParams{
+		Key:       "runner.default_limit",
+		ValueJSON: `{"value":25}`,
+		UpdatedAt: updatedAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("UpsertConfigValue(update): %v", err)
+	}
+	if updated.ValueJSON != `{"value":25}` || !updated.UpdatedAt.Equal(updatedAt.Add(time.Hour)) {
+		t.Fatalf("updated config value = %#v", updated)
+	}
+
+	values, err := repository.ListConfigValues()
+	if err != nil {
+		t.Fatalf("ListConfigValues(): %v", err)
+	}
+	if len(values) != 1 || values[0].Key != "runner.default_limit" || values[0].ValueJSON != `{"value":25}` {
+		t.Fatalf("config values = %#v", values)
+	}
+
+	deleted, err := repository.DeleteConfigValue("runner.default_limit")
+	if err != nil {
+		t.Fatalf("DeleteConfigValue(existing): %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteConfigValue(existing) = false, want true")
+	}
+	deleted, err = repository.DeleteConfigValue("runner.default_limit")
+	if err != nil {
+		t.Fatalf("DeleteConfigValue(missing): %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteConfigValue(missing) = true, want false")
+	}
+}
+
+func TestConfigValueValidation(t *testing.T) {
+	t.Parallel()
+
+	repository, err := Open(filepath.Join(t.TempDir(), "openplanner.db"))
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	defer func() {
+		if err := repository.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}()
+
+	_, err = repository.UpsertConfigValue(UpsertConfigValueParams{
+		Key:       "runner.default_limit",
+		ValueJSON: `{"value":`,
+		UpdatedAt: time.Date(2026, 4, 24, 12, 30, 0, 0, time.UTC),
+	})
+	if err == nil || !strings.Contains(err.Error(), "valid JSON") {
+		t.Fatalf("invalid JSON error = %v, want valid JSON rejection", err)
+	}
+
+	_, err = repository.GetConfigValue(" ")
+	if err == nil || !strings.Contains(err.Error(), "config key is required") {
+		t.Fatalf("empty key error = %v, want key rejection", err)
 	}
 }
 

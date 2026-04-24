@@ -514,6 +514,9 @@ func runCommand(args []string) {
 	}
 	filteredRun := strings.TrimSpace(options.ScenarioFilter) != ""
 	cacheConfig := cacheConfig{Mode: options.CacheMode, RunRoot: runRoot}
+	if err := setupEvalCodexHome(runRoot); err != nil {
+		failf("prepare eval Codex home: %v", err)
+	}
 
 	marker := filepath.Join(runRoot, "history-marker")
 	if err := os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339Nano)), 0o644); err != nil {
@@ -524,7 +527,7 @@ func runCommand(args []string) {
 		failf("stat history marker: %v", err)
 	}
 
-	codexVersion := commandOutput("codex", "--version")
+	codexVersion := commandOutputWithEnv(evalCodexEnv(runRoot), "codex", "--version")
 	cachePrewarmSeconds := 0.0
 	if options.CacheMode == cacheModeShared {
 		start := time.Now()
@@ -552,10 +555,10 @@ func runCommand(args []string) {
 	limitation := ""
 	if newSessionFiles != 0 && multiTurnJobs == 0 {
 		historyStatus = "review"
-		limitation = "Session-file count changed even though only single-turn ephemeral scenarios ran; this may be from another Codex process."
+		limitation = "Session-file count changed under <run-root>/codex-home even though only single-turn ephemeral scenarios ran."
 	} else if multiTurnJobs > 0 && newSessionFiles < multiTurnJobs {
 		historyStatus = "review"
-		limitation = "Fewer session files referenced <run-root> than expected for persisted multi-turn eval sessions."
+		limitation = "Fewer session files appeared under <run-root>/codex-home than expected for persisted multi-turn eval sessions."
 	}
 
 	outReport := report{
@@ -563,7 +566,7 @@ func runCommand(args []string) {
 		Date:                  options.Date,
 		Model:                 modelName,
 		ReasoningEffort:       reasoningEffort,
-		Harness:               "codex exec --json --full-auto from throwaway run directories; single-turn scenarios use --ephemeral, multi-turn scenarios resume a persisted eval session with explicit writable eval roots",
+		Harness:               "codex exec --json --full-auto from throwaway run directories with isolated CODEX_HOME; single-turn scenarios use --ephemeral, multi-turn scenarios resume a persisted eval session with explicit writable eval roots",
 		Parallelism:           options.Parallelism,
 		CacheMode:             options.CacheMode,
 		CachePrewarmSeconds:   cachePrewarmSeconds,
@@ -582,15 +585,16 @@ func runCommand(args []string) {
 			MultiTurnPersistedTurns:    countMultiTurnPersistedTurns(jobs),
 			OpenPlannerWorkspaceUsed:   false,
 			DesktopAppUsed:             false,
-			VerificationMethod:         "Single-turn scenarios use codex exec --ephemeral from <run-root>/production/<scenario>/repo. Multi-turn scenarios create one persisted Codex exec session per scenario and resume it for later turns; all raw logs stay under <run-root>.",
+			VerificationMethod:         "Single-turn scenarios use codex exec --ephemeral from <run-root>/production/<scenario>/repo. Multi-turn scenarios create one persisted Codex exec session per scenario inside <run-root>/codex-home and resume it for later turns; all raw logs stay under <run-root>.",
 			VerificationLimitation:     limitation,
 		},
 		CommandTemplate: []string{
 			"OPENPLANNER_DATABASE_PATH=<run-root>/production/<scenario>/repo/openplanner.db",
+			"CODEX_HOME=<run-root>/codex-home, seeded with auth.json only",
 			"GOCACHE=<run-root>/shared-cache/gocache when --cache-mode shared; otherwise <run-root>/production/<scenario>/gocache",
 			"GOMODCACHE=<run-root>/shared-cache/gomodcache when --cache-mode shared; otherwise <run-root>/production/<scenario>/gomodcache",
-			"single turn: codex exec --json --ephemeral --full-auto --skip-git-repo-check --add-dir <run-root>/production/<scenario> --add-dir <run-root>/shared-cache when --cache-mode shared -C <run-root>/production/<scenario>/repo -m gpt-5.4-mini -c model_reasoning_effort=\"medium\" -c shell_environment_policy.inherit=all <natural user prompt>",
-			"multi turn: first turn uses codex exec without --ephemeral; later turns use codex exec -C <run-root>/production/<scenario>/repo --add-dir <writable-eval-roots> resume <thread-id> --json with per-turn logs",
+			"single turn: codex exec --json --ephemeral --full-auto --skip-git-repo-check --ignore-user-config --add-dir <run-root>/production/<scenario> --add-dir <run-root>/shared-cache when --cache-mode shared -C <run-root>/production/<scenario>/repo -m gpt-5.4-mini -c model_reasoning_effort=\"medium\" -c shell_environment_policy.inherit=all <natural user prompt>",
+			"multi turn: first turn uses codex exec without --ephemeral and with --ignore-user-config; later turns use codex exec -C <run-root>/production/<scenario>/repo --add-dir <writable-eval-roots> resume --ignore-user-config <thread-id> --json with per-turn logs",
 		},
 		MetricNotes:      metricNotes(results),
 		ScenarioCoverage: scenarioCoverageFor(selectedScenarios, filteredRun),
@@ -1376,20 +1380,20 @@ func codexArgsForTurn(runRepo string, runDir string, currentScenario scenario, t
 	}
 	writableRoots := codexWritableRoots(runDir, cache)
 	if len(scenarioTurns(currentScenario)) == 1 {
-		args := []string{"exec", "--json", "--ephemeral", "--full-auto", "--skip-git-repo-check", "-C", runRepo}
+		args := []string{"exec", "--json", "--ephemeral", "--full-auto", "--skip-git-repo-check", "--ignore-user-config", "-C", runRepo}
 		args = appendAddDirs(args, writableRoots)
 		args = append(args, baseConfig...)
 		return append(args, turn.Prompt)
 	}
 	if turnIndex == 1 {
-		args := []string{"exec", "--json", "--full-auto", "--skip-git-repo-check", "-C", runRepo}
+		args := []string{"exec", "--json", "--full-auto", "--skip-git-repo-check", "--ignore-user-config", "-C", runRepo}
 		args = appendAddDirs(args, writableRoots)
 		args = append(args, baseConfig...)
 		return append(args, turn.Prompt)
 	}
 	args := []string{"exec", "-C", runRepo}
 	args = appendAddDirs(args, writableRoots)
-	args = append(args, "resume", "--json", "--full-auto", "--skip-git-repo-check")
+	args = append(args, "resume", "--json", "--full-auto", "--skip-git-repo-check", "--ignore-user-config")
 	args = append(args, baseConfig...)
 	args = append(args, sessionID, turn.Prompt)
 	return args
@@ -1411,16 +1415,74 @@ func appendAddDirs(args []string, roots []string) []string {
 }
 
 func evalEnv(runDir string, dbPath string, cache cacheConfig) []string {
-	env := os.Environ()
+	env := evalCodexEnv(cache.RunRoot)
 	paths := evalPathsFor(runDir, cache)
-	env = append(env,
-		"OPENPLANNER_DATABASE_PATH="+dbPath,
-		"GOCACHE="+paths.GoCache,
-		"GOMODCACHE="+paths.GoModCache,
-		"TMPDIR="+paths.Temp,
-		"PATH="+filepath.Join(runDir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
-	)
+	env = envWithOverride(env, "OPENPLANNER_DATABASE_PATH", dbPath)
+	env = envWithOverride(env, "GOCACHE", paths.GoCache)
+	env = envWithOverride(env, "GOMODCACHE", paths.GoModCache)
+	env = envWithOverride(env, "TMPDIR", paths.Temp)
+	env = envWithOverride(env, "PATH", filepath.Join(runDir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return env
+}
+
+func evalCodexEnv(runRoot string) []string {
+	return envWithOverride(os.Environ(), "CODEX_HOME", evalCodexHome(runRoot))
+}
+
+func envWithOverride(env []string, key string, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return append(out, prefix+value)
+}
+
+func evalCodexHome(runRoot string) string {
+	return filepath.Join(runRoot, "codex-home")
+}
+
+func sourceCodexHome() (string, error) {
+	if home := os.Getenv("CODEX_HOME"); home != "" {
+		return home, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex"), nil
+}
+
+func setupEvalCodexHome(runRoot string) error {
+	sourceHome, err := sourceCodexHome()
+	if err != nil {
+		return err
+	}
+	return setupEvalCodexHomeFromSource(runRoot, sourceHome)
+}
+
+func setupEvalCodexHomeFromSource(runRoot string, sourceHome string) error {
+	authPath := filepath.Join(sourceHome, "auth.json")
+	authBytes, err := os.ReadFile(authPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("missing Codex auth at %s; run codex login before running evals", authPath)
+		}
+		return err
+	}
+	codexHome := evalCodexHome(runRoot)
+	if err := os.RemoveAll(codexHome); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), authBytes, 0o600); err != nil {
+		return err
+	}
+	return nil
 }
 
 func evalDatabasePath(runRepo string) string {
@@ -3583,8 +3645,10 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func commandOutput(name string, args ...string) string {
-	out, err := exec.Command(name, args...).CombinedOutput()
+func commandOutputWithEnv(env []string, name string, args ...string) string {
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "unavailable"
 	}
@@ -3592,11 +3656,7 @@ func commandOutput(name string, args ...string) string {
 }
 
 func countNewSessionFiles(since time.Time, runRoot string) int {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return -1
-	}
-	sessionsRoot := filepath.Join(home, ".codex", "sessions")
+	sessionsRoot := filepath.Join(evalCodexHome(runRoot), "sessions")
 	count := 0
 	_ = filepath.WalkDir(sessionsRoot, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {

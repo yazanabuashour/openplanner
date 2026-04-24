@@ -23,6 +23,18 @@ type Store struct {
 	db *sql.DB
 }
 
+type ConfigValue struct {
+	Key       string
+	ValueJSON string
+	UpdatedAt time.Time
+}
+
+type UpsertConfigValueParams struct {
+	Key       string
+	ValueJSON string
+	UpdatedAt time.Time
+}
+
 type migration struct {
 	version int
 	name    string
@@ -229,6 +241,17 @@ var migrations = []migration{
 				WHERE ical_uid IS NOT NULL;
 		`,
 	},
+	{
+		version: 9,
+		name:    "openplanner config",
+		sql: `
+			CREATE TABLE IF NOT EXISTS openplanner_config (
+				key TEXT PRIMARY KEY,
+				value_json TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+		`,
+	},
 }
 
 func Open(path string) (*Store, error) {
@@ -261,6 +284,92 @@ func Open(path string) (*Store, error) {
 
 func (store *Store) Close() error {
 	return store.db.Close()
+}
+
+func (store *Store) GetConfigValue(key string) (*ConfigValue, error) {
+	if err := validateConfigKey(key); err != nil {
+		return nil, err
+	}
+
+	row := store.db.QueryRow(`
+		SELECT key, value_json, updated_at
+		FROM openplanner_config
+		WHERE key = ?
+	`, key)
+	value, err := scanConfigValue(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get OpenPlanner config value: %w", err)
+	}
+	return &value, nil
+}
+
+func (store *Store) ListConfigValues() ([]ConfigValue, error) {
+	rows, err := store.db.Query(`
+		SELECT key, value_json, updated_at
+		FROM openplanner_config
+		ORDER BY key ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list OpenPlanner config values: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var values []ConfigValue
+	for rows.Next() {
+		value, err := scanConfigValue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan OpenPlanner config value: %w", err)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate OpenPlanner config values: %w", err)
+	}
+	return values, nil
+}
+
+func (store *Store) UpsertConfigValue(params UpsertConfigValueParams) (ConfigValue, error) {
+	if err := validateConfigKey(params.Key); err != nil {
+		return ConfigValue{}, err
+	}
+	if !json.Valid([]byte(params.ValueJSON)) {
+		return ConfigValue{}, fmt.Errorf("config value_json for %q must be valid JSON", params.Key)
+	}
+
+	row := store.db.QueryRow(`
+		INSERT INTO openplanner_config (key, value_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			updated_at = excluded.updated_at
+		RETURNING key, value_json, updated_at
+	`, params.Key, params.ValueJSON, formatTime(params.UpdatedAt))
+	value, err := scanConfigValue(row)
+	if err != nil {
+		return ConfigValue{}, fmt.Errorf("upsert OpenPlanner config value: %w", err)
+	}
+	return value, nil
+}
+
+func (store *Store) DeleteConfigValue(key string) (bool, error) {
+	if err := validateConfigKey(key); err != nil {
+		return false, err
+	}
+
+	result, err := store.db.Exec(`DELETE FROM openplanner_config WHERE key = ?`, key)
+	if err != nil {
+		return false, fmt.Errorf("delete OpenPlanner config value: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete OpenPlanner config value rows affected: %w", err)
+	}
+	return deleted > 0, nil
 }
 
 func (store *Store) CreateCalendar(calendar domain.Calendar) error {
@@ -1889,6 +1998,25 @@ func parseTags(value string) ([]string, error) {
 		return []string{}, nil
 	}
 	return tags, nil
+}
+
+func scanConfigValue(scanner interface {
+	Scan(dest ...any) error
+}) (ConfigValue, error) {
+	var value ConfigValue
+	var updatedAt string
+	if err := scanner.Scan(&value.Key, &value.ValueJSON, &updatedAt); err != nil {
+		return ConfigValue{}, err
+	}
+	value.UpdatedAt = parseStoredTime(updatedAt)
+	return value, nil
+}
+
+func validateConfigKey(key string) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("config key is required")
+	}
+	return nil
 }
 
 func taskHasAllTags(task domain.Task, tags []string) bool {
